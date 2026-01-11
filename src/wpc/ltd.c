@@ -358,13 +358,27 @@ static UINT8 convDisp(UINT8 data) {
 static WRITE_HANDLER(peri4_w) {
   if (locals.port2 & 0x10) {
     switch (locals.cycle) {
-      case  0: locals.clear = data != 0xff; if (locals.clear) locals.lampCol = (1 + core_BitColToNum(data)) % 8; break;
+      case  0:
+        locals.clear = data != 0xff;
+        if (locals.clear) {
+          UINT8 mask = data;
+          if (mask != 0x00) {
+            if (!singleBitSet(mask))
+              mask &= (UINT8)(-((INT8)mask)); // keep lowest set bit
+            locals.lampCol = (1 + core_BitColToNum(mask)) % 8;
+          }
+        }
+        break;
       case  1: if (locals.isHH) {
                  if ((data & 0x0f) != 0x0f) locals.solenoids |= 0x10 << (data & 0x0f);
                  if ((data & 0xf0) != 0xf0) locals.solenoids |= 0x4000 << (data >> 4);
                  coreGlobals.solenoids = locals.solenoids;
-               } else
-                 locals.solBank = core_BitColToNum(data);
+               } else if (data != 0xff && data != 0x00) {
+                 UINT8 mask = data;
+                 if (!singleBitSet(mask))
+                   mask &= (UINT8)(-((INT8)mask)); // keep lowest set bit
+                 locals.solBank = core_BitColToNum(mask);
+               }
                break;
       case  2: locals.solenoids |= (data >> 4) << (locals.solBank * 4);
                locals.solenoids2 |= (data & 0x0f) << 4;

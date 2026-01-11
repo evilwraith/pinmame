@@ -1802,7 +1802,7 @@ static void cpu_vblankcallback(int param)
 	{
 		/* do we update the screen now? */
 		if (!(Machine->drv->video_attributes & VIDEO_UPDATE_AFTER_VBLANK))
-			time_to_quit = updatescreen();
+			time_to_quit |= updatescreen();
 
 		/* Set the timer to update the screen */
 		timer_set(TIME_IN_USEC(Machine->drv->vblank_duration), 0, cpu_updatecallback);
@@ -1830,7 +1830,7 @@ static void cpu_updatecallback(int param)
 {
 	/* update the screen if we didn't before */
 	if (Machine->drv->video_attributes & VIDEO_UPDATE_AFTER_VBLANK)
-		time_to_quit = updatescreen();
+		time_to_quit |= updatescreen();
 	vblank = 0;
 
 	/* update IPT_VBLANK input ports */

@@ -696,6 +696,8 @@ INLINE int __builtin_ctz(const unsigned int n)
 INLINE unsigned int core_BitColToNum(unsigned int n)
 {
    if (n == 0) return 0;
+   if (!singleBitSet(n))
+      n &= (~n + 1u); // keep lowest set bit so we can continue without asserting
    assert(singleBitSet(n));
    // count trailing zeros
 #ifdef _MSC_VER
