@@ -15,3 +15,4 @@ build/
 /src/remote_debug/suite_log.txt
 /src/remote_debug/test_log.txt
 /src/remote_debug/sse_log.txt
+.DS_Store
