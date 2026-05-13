@@ -21,6 +21,7 @@ extern "C" {
 #include "video.h"
 #include "audit.h"
 #include "mech.h"
+#include "memory.h"
 
 extern int throttle;
 extern int autoframeskip;
@@ -631,8 +632,10 @@ extern "C" void OnStateChange(const int state)
 			if (displayCount <= layout->index)
 				displayCount = layout->index + 1;
 		}
-		if (hasDMDOrVideo)
-			displayCount++;
+		// Reserve one extra slot unconditionally.
+		// Using hasDMDOrVideo as the gate is wrong here: segment-only games also create an extra
+		// synthetic 128x32 DMD below, so they need one additional display slot as well.
+		displayCount++;
 		_displays.resize(displayCount);
 
 		for (const struct core_dispLayout* layout = core_gameData->lcdLayout, * parent_layout = nullptr; layout->length || (parent_layout && parent_layout->length); layout += 1) {
@@ -1547,6 +1550,45 @@ PINMAMEAPI int PinmameGetChangedNVRAM(PinmameNVRAMState* const p_nvramStates)
 	mame_fclose(nvram_file);
 
 	return count;
+}
+
+/******************************************************
+ * PinmameReadMainCPUByte
+ ******************************************************/
+
+PINMAMEAPI int PinmameReadMainCPUByte(const uint32_t address, uint8_t* const p_value)
+{
+	if (!_isRunning || p_value == nullptr)
+	{
+		return 0;
+	}
+
+	uint8_t* p_memory = static_cast<uint8_t*>(memory_get_read_ptr(0, address));
+	if (p_memory == nullptr)
+	{
+		return 0;
+	}
+
+	*p_value = *p_memory;
+	return 1;
+}
+
+/******************************************************
+ * PinmameGetRawMemoryRegion
+ ******************************************************/
+
+PINMAMEAPI const uint8_t* PinmameGetRawMemoryRegion(const int region)
+{
+	return _isRunning ? memory_region(region) : nullptr;
+}
+
+/******************************************************
+ * PinmameGetRawMemoryRegionLength
+ ******************************************************/
+
+PINMAMEAPI size_t PinmameGetRawMemoryRegionLength(const int region)
+{
+	return _isRunning ? memory_region_length(region) : 0;
 }
 
 /******************************************************

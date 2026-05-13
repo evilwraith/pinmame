@@ -61,9 +61,10 @@ DRIVERNV(agsoccer25l)   //         04/93  A.G. Soccer-Ball (R18u, 2.5L Sound)
 DRIVERNV(agfoot07)      // AG01:   07/92  A.G. Football (R07u)
 DRIVERNV(agfootbl)      //         04/93  A.G. Football (R18u, 2.1 Sound)
 DRIVERNV(agfootbl25l)   //         04/93  A.G. Football (R18u, 2.5L Sound)
-DRIVERNV(wrldtou3)      // AG03:   02/93  Al's Garage Band Goes On a World Tour (R06a)
-DRIVERNV(wrldtou2)      //         02/93  Al's Garage Band Goes On a World Tour (R02b)
-DRIVERNV(wrldtour)      //         03/93  Al's Garage Band Goes On a World Tour (R01c)
+DRIVERNV(wrldtou4)      // AG03:   04/93  Al's Garage Band Goes On a World Tour Version A (R09a)
+DRIVERNV(wrldtou3)      //         02/93  Al's Garage Band Goes On a World Tour Version A (R06a)
+DRIVERNV(wrldtou2)      //         02/93  Al's Garage Band Goes On a World Tour Version B (R02b)
+DRIVERNV(wrldtour)      //         03/93  Al's Garage Band Goes On a World Tour Version B (R01c)
 DRIVERNV(usafoota)      // AG05:   09/92  U.S.A. Football (R01u)
 DRIVERNV(usafootb)      //         02/93  U.S.A. Football (R06u)
 DRIVERNV(punchy)        // EPC061: 08/93  Punchy the Clown (R02)
@@ -159,12 +160,14 @@ DRIVERNV(pwerplay)      //BY17-724: 01/78 Power Play
 DRIVERNV(pwerplab)      //          10/08 Power Play (Free Play)
 DRIVERNV(pwerplac)      //          12/18 Power Play (Free Play+)
 DRIVERNV(matahari)      //BY17-725: 04/78 Mata Hari
-DRIVERNV(matatest)      //          ??/06 Mata Hari (New game rules)
+DRIVERNV(matatest)      //          ??/06 Mata Hari (New game rules MOD)
 DRIVERNV(mataharb)      //          10/08 Mata Hari (Free Play)
 DRIVERNV(mataharc)      //          02/19 Mata Hari (Free Play+)
+DRIVERNV(matahard)      //          04/25 Mata Hari (Free Play and MODified rules)
+DRIVERNV(matahard7)     //          04/25 Mata Hari (Free Play and MODified rules, 7-digit)
 DRIVERNV(blackjck)      //BY17-728: 06/78 Black Jack
 DRIVERNV(blackjcb)      //          10/08 Black Jack (Free Play)
-DRIVERNV(blackjcc)      //          04/18 Black Jack (Saucer points modification)
+DRIVERNV(blackjcc)      //          04/18 Black Jack (Saucer points MOD)
 DRIVERNV(blackjcd)      //          12/18 Black Jack (Free Play+)
 DRIVERNV(stk_sprs)      //BY17-740: 06/78 Strikes and Spares
 DRIVERNV(stk_sprb)      //          10/08 Strikes and Spares (Free Play)
@@ -341,6 +344,7 @@ DRIVERNV(beatclc2)      //          11/85 Beat the Clock (with flasher support)
 DRIVERNV(ladyluck)      //6803-0E34:02/86 Lady Luck
 DRIVERNV(motrdomb)      //6803-0E14:05/86 MotorDome (rev. B)
 DRIVERNV(motrdome)      //          06/86 MotorDome (rev. D)
+DRIVERNV(motrdomf)      //          11/86 MotorDome (rev. F)
 DRIVERNV(motrdomg)      //6803-0E69:07/86 MotorDome (German rev. B)
                         //6803-????:06/86 Karate Fight (Prototype for Black Belt?)
 DRIVERNV(blackblt)      //6803-0E52:07/86 Black Belt
@@ -366,7 +370,8 @@ DRIVERNV(black10s)      //          03/88 Blackwater 100 (Single Ball Play)
 //Williams Merger begins here.. but these are still under the Bally name
 DRIVERNV(trucksp2)      //6803-2001:11/88 Truck Stop (P-2)
 DRIVERNV(trucksp3)      //          12/88 Truck Stop (P-3)
-DRIVERNV(atlantis)      //6803-2006:03/89 Atlantis
+DRIVERNV(atlantis)      //6803-2006:03/89 Atlantis (rev. 3)
+DRIVERNV(atlantist)     //          04/26 Atlantis (rev. 3 Tournament MOD v3931)
                         //??        05/89 Ice Castle
 
 // ---------------
@@ -816,6 +821,7 @@ DRIVERNV(arenaf)        //                Arena (French)
 DRIVERNV(arenaffp)      //                Arena (French Free Play)
 DRIVERNV(arenaa)        //                Arena (rev.1)
 DRIVERNV(arenaafp)      //                Arena (rev.1 Free Play)
+DRIVERNV(arena2)        //                Arena (rev.2)
 DRIVERNV(victory)       //S80b-710: 10/87 Victory
 DRIVERNV(victryfp)      //                Victory (Free Play)
 DRIVERNV(victoryg)      //                Victory (German)
@@ -2732,6 +2738,7 @@ DRIVER(polic,l3)        //          09/89 W Police Force (LA-3)
 DRIVER(polic,l4)        //          10/89 W Police Force (LA-4)
 DRIVER(polic,g4)        //          10/89 W Police Force (LG-4 German)
 DRIVER(polic,lx5)       //          12/25   Police Force (LX-5a MOD)
+DRIVER(polic,lx5pi)     //          03/26   Police Force (LX-5pi (Post INDISC) MOD)
 DRIVER(eatpm,p7)        //S11-782:  09/89 B Elvira and the Party Monsters (PA-7 Prototype)
 DRIVER(eatpm,l1)        //          09/89 B Elvira and the Party Monsters (LA-1)
 DRIVER(eatpm,f1)        //          09/89 B Elvira and the Party Monsters (LF-1 French)
@@ -2817,10 +2824,11 @@ DRIVER(fh,l5)           //          02/91 W Funhouse (L-5)
 DRIVER(fh,d5)           //                  Funhouse (D-5) LED Ghost Fix
 DRIVER(fh,l9)           //          12/92 W Funhouse (L-9)
 DRIVER(fh,d9)           //                  Funhouse (D-9) LED Ghost Fix
-DRIVER(fh,l9b)          //                  Funhouse bootleg with correct German translation
-DRIVER(fh,d9b)          //                  Funhouse bootleg with correct German translation LED Ghost Fix
+DRIVER(fh,l9b)          //                  Funhouse (L-9 Improved German translation MOD)
+DRIVER(fh,d9b)          //                  Funhouse (D-9 Improved German translation MOD) LED Ghost Fix
 DRIVER(fh,905h)         //          04/96 W Funhouse (9.05H)
 DRIVER(fh,906h)         //                  Funhouse (9.06H Coin Play)
+DRIVER(fh,907h)         //          04/26   Funhouse (9.07H LED Ghost Fix + Ballsaver MOD)
 DRIVER(fh,f91)          //          ??/??   Funhouse (FreeWPC 0.91)
 DRIVER(bop,l2)          //WPC-502:  04/91 W Machine: Bride of Pinbot, The (L-2)
 DRIVER(bop,d2)          //                  Machine: Bride of Pinbot, The (D-2) LED Ghost Fix
@@ -2903,6 +2911,7 @@ DRIVER(taf,l6)          //          03/93 B Addams Family, The (L-6)
 DRIVER(taf,d6)          //                  Addams Family, The (D-6) LED Ghost Fix
 DRIVER(taf,l7)          //          10/92 B Addams Family, The (L-7) (Prototype L-5)
 DRIVER(taf,d7)          //                  Addams Family, The (D-7) (Prototype L-5) LED Ghost Fix
+DRIVER(taf,d7bs)        //          04/26   Addams Family, The (D-7) (Prototype L-5) Ballsave MOD + LED Ghost Fix
 DRIVER(taf,h4)          //          05/94 B Addams Family, The (H-4)
 DRIVER(taf,i4)          //                  Addams Family, The (I-4) LED Ghost Fix
 DRIVER(gw,pb)           //WPC-504:  03/92 W Getaway: High Speed II, The (P-B)
@@ -3055,6 +3064,7 @@ DRIVER(sttng,l7c)       //          08/17 W Star Trek: The Next Generation (LX-7
 DRIVER(sttng,x7)        //          02/94 W Star Trek: The Next Generation (LX-7 Special Sound L-1)
 DRIVER(sttng,dx)        //                  Star Trek: The Next Generation (DX-7 Special Sound L-1) LED Ghost Fix
 DRIVER(sttng,x8)        //          02/23 W Star Trek: The Next Generation (LX-8 MOD Special Sound L-1)
+DRIVER(sttng,x9)        //          03/26 W Star Trek: The Next Generation (LX-9 MOD Special Sound L-1)
 DRIVER(sttng,g7)        //          02/94 W Star Trek: The Next Generation (LG-7 German)
 DRIVER(sttng,h7)        //                  Star Trek: The Next Generation (HG-7) LED Ghost Fix
 DRIVER(pop,pa3)         //WPC-522:  12/93 B Popeye Saves the Earth (PA-3 Prototype)

@@ -109,6 +109,14 @@ BY6803_ROMEND
 #define input_ports_motrdomb input_ports_motrdome
 CORE_CLONEDEFNV(motrdomb,motrdome,"MotorDome (rev. B)",1986,"Bally",by_mBY6803_TCSS,0)
 
+BY6803_ROMSTART44(motrdomf,"motordome_U2_24-nov-86.bin",CRC(8A558F1B) SHA1(de89325c89676c15661e7056297f2a18fd99b17d), // Label is hard to read: "mOtORDOme U2(??) Rev F(?) 11-24-86"
+                           "motordome_U3_24-nov-86.bin",CRC(8EC6AF75) SHA1(2bd12d1ce19166f096281fbbde9ddceb77da0ba5))
+BYTCS_SOUNDROM8(           "modm_u7.snd",CRC(29ce4679) SHA1(f17998198b542dd99a34abd678db7e031bde074b)) // also dumped, was same as above
+BY6803_ROMEND
+#define init_motrdomf init_motrdome
+#define input_ports_motrdomf input_ports_motrdome
+CORE_CLONEDEFNV(motrdomf,motrdome,"MotorDome (rev. F)",1986,"Bally",by_mBY6803_TCSS,0)
+
 // german version claims to be game #E69!?
 BY6803_ROMSTART44(motrdomg,"u2_11_de.bin",CRC(8a4bafd3) SHA1(d764d2e38be2df27ab982cfbedddb79f89ca2359),
                            "u3_11_de.bin",CRC(9cb10037) SHA1(7847a71a0295e8de51a8f2f8d406350eca4555bf))
@@ -367,7 +375,7 @@ CORE_CLONEDEFNV(trucksp2,trucksp3,"Truck Stop (P-2 Prototype)",1988,"Bally",by_m
 / Atlantis (6803-2006: 03/89)
 /-----------------------------------------------------------*/
 // rev. 2 exists but yet undumped (https://pinside.com/pinball/forum/topic/bally-atlantis-ownerss-club-fans-welcome/page/11#post-2697513)
-// also an excessive tournament MOD exists (slochar, allentownpinball)
+// also an excessive tournament MOD exists (slochar, allentownpinball) (the latter one below should(!) be the most recent one of that)
 INITGAME6803(atlantis,GEN_BY6803A,dispBy104,FLIP6803,4,SNDBRD_S11CS, BY6803_DISPALPHA)
 BY6803_ROMSTART44(atlantis, "u26_cpu.rom",CRC(b98491e1) SHA1(b867e2b24e93c4ee19169fe93c0ebfe0c1e2fc25),
                             "u27_cpu.rom",CRC(8ea2b4db) SHA1(df55a9fb70d1cabad51dc2b089af7904a823e1d8))
@@ -377,3 +385,13 @@ S11CS_SOUNDROM888(          "u4_snd.rom", CRC(6a48b588) SHA1(c58dbfd920c279d7b9d
 BY6803_ROMEND
 #define input_ports_atlantis input_ports_by6803a
 CORE_GAMEDEFNV(atlantis,"Atlantis (rev. 3)",1989,"Bally",by_mBY6803_S11CS,0)
+
+BY6803_ROMSTART44(atlantist,"ATLANTIS_U2_v3931.128",CRC(D8BF5909) SHA1(b35fbf54750300d36791212fb3a080d31bf1195d),
+                            "ATLANTIS_U3_v3931.128",CRC(7EC08607) SHA1(f6f4042d410da046bb5b8e239dffde937568e7b5))
+S11CS_SOUNDROM888(          "u4_snd.rom", CRC(6a48b588) SHA1(c58dbfd920c279d7b9d2de8558d73c687b29ce9c),
+                            "u19_snd.rom",CRC(1387467c) SHA1(8b3dd6c2fc94cfebc1879795532c651cda202846),
+                            "u20_snd.rom",CRC(d5a6a773) SHA1(30807e03655d2249c801007350bfb228a2e8a0a4))
+BY6803_ROMEND
+#define init_atlantist init_atlantis
+#define input_ports_atlantist input_ports_atlantis
+CORE_CLONEDEFNV(atlantist,atlantis,"Atlantis (rev. 3 Tournament MOD v3931)",2026,"Bally / slochar",by_mBY6803_S11CS,0) // 'fixed all the errors with the original tournament rom'
