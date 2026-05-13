@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <atomic>
 
 #if defined(_WIN32) || defined(_WIN64)
 #define strcasecmp _stricmp
@@ -36,13 +37,13 @@ PINMAME_DMD_MODE g_fDmdMode = PINMAME_DMD_MODE_BRIGHTNESS;
 char g_szGameName[256] = {}; //!! not set yet
 }
 
-static int _isRunning = 0;
-static int _timeToQuit = 0;
+static std::atomic_int _isRunning { 0 };
+static std::atomic_int _timeToQuit { 0 };
 static PinmameConfig* _p_Config = nullptr;
 static std::thread* _p_gameThread = nullptr;
 static void* _p_userData = nullptr;
 
-static char _aliasFromFile[50];
+static char _aliasFromFile[256];
 
 static int _mechInit[MECH_MAXMECH];
 static PinmameMechInfo _mechInfo[MECH_MAXMECH];
@@ -255,42 +256,100 @@ static char* ComposePath(const char* const path, const char* const file)
 	return newPath;
 }
 
-/******************************************************
- * CheckGameAlias
- ******************************************************/
-
-static const char* CheckGameAlias(const char* const romName)
+static char* TrimAliasToken(char* token)
 {
-	if (!_p_Config || !_p_Config->vpmPath[0])
-		return romName;
+	char* end;
 
-	char aliasPath[PINMAME_MAX_PATH];
-	strcpy(aliasPath, _p_Config->vpmPath);
-	const size_t len = strlen(_p_Config->vpmPath);
-	if (len > 0 && aliasPath[len - 1] != '/' && aliasPath[len - 1] != '\\')
-		strcat(aliasPath, "/");
-	strcat(aliasPath, "alias.txt");
+	if (token == nullptr)
+		return nullptr;
 
+	while (*token == ' ' || *token == '\t')
+		token++;
+
+	end = token + strlen(token);
+	while (end > token) {
+		const char c = *(end - 1);
+		if (c != ' ' && c != '\t' && c != '\r' && c != '\n')
+			break;
+		*--end = '\0';
+	}
+
+	return token;
+}
+
+static const char* ReadGameAliasFromFile(const char* const aliasPath, const char* const romName)
+{
 	FILE* file = fopen(aliasPath, "r");
 
 	if (file != nullptr) {
-		char line[128];
+		char line[256];
 		while (fgets(line, sizeof(line), file)) {
-			// Skip lines that start with "#"
-			if (line[0] == '#')
+			char* alias;
+			char* real;
+			char* comment;
+			char* comma;
+			char* cursor = TrimAliasToken(line);
+
+			if (*cursor == '\0' || *cursor == '#')
 				continue;
 
-			char* token = strtok(line, ", ");
+			comma = strchr(cursor, ',');
+			if (comma == nullptr)
+				continue;
 
-			if (!strcasecmp(token, romName))
-			{
-				strcpy(_aliasFromFile,  strtok(nullptr, " ,\n#;'"));
+			*comma = '\0';
+			alias = TrimAliasToken(cursor);
+			real = TrimAliasToken(comma + 1);
+
+			comment = strpbrk(real, "#;");
+			if (comment != nullptr) {
+				*comment = '\0';
+				real = TrimAliasToken(real);
+			}
+
+			if (*alias == '\0' || *real == '\0')
+				continue;
+
+			if (!strcasecmp(alias, romName)) {
+				snprintf(_aliasFromFile, sizeof(_aliasFromFile), "%s", real);
 				fclose(file);
 				return _aliasFromFile;
 			}
 		}
 		fclose(file);
 	}
+
+	return nullptr;
+}
+
+/******************************************************
+ * CheckGameAlias
+ ******************************************************/
+
+static const char* CheckGameAlias(const char* const romName)
+{
+	static const char* const aliasFiles[] = {
+		"VPMAlias.txt",
+		"Alias.txt",
+		"alias.txt",
+		nullptr
+	};
+
+	if (!_p_Config || !_p_Config->vpmPath[0])
+		return romName;
+
+	char aliasPath[PINMAME_MAX_PATH];
+	const size_t len = strlen(_p_Config->vpmPath);
+	const char* const separator = (len > 0 && _p_Config->vpmPath[len - 1] != '/' && _p_Config->vpmPath[len - 1] != '\\') ? "/" : "";
+
+	for (const char* const* aliasFile = aliasFiles; *aliasFile != nullptr; ++aliasFile) {
+		if (snprintf(aliasPath, sizeof(aliasPath), "%s%s%s", _p_Config->vpmPath, separator, *aliasFile) >= (int)sizeof(aliasPath))
+			continue;
+
+		if (const char* const alias = ReadGameAliasFromFile(aliasPath, romName))
+			return alias;
+	}
+
 	return romName;
 }
 
@@ -1086,7 +1145,7 @@ PINMAMEAPI void PinmameStop()
 {
 	if (!_p_gameThread) {
 		if (_isRunning) {
-			libpinmame_log_error("PinmameStop(): run state is %d but game thread handle is null; forcing stopped state.", _isRunning);
+			libpinmame_log_error("PinmameStop(): run state is %d but game thread handle is null; forcing stopped state.", _isRunning.load());
 			OnStateChange(0);
 		}
 		return;
@@ -1112,7 +1171,7 @@ PINMAMEAPI void PinmameStop()
 	_displays.clear();
 
 	if (_isRunning) {
-		libpinmame_log_error("PinmameStop(): game thread joined but run state is %d; forcing stopped state.", _isRunning);
+		libpinmame_log_error("PinmameStop(): game thread joined but run state is %d; forcing stopped state.", _isRunning.load());
 		OnStateChange(0);
 	}
 }
@@ -1123,7 +1182,7 @@ PINMAMEAPI void PinmameStop()
 
 PINMAMEAPI PINMAME_HARDWARE_GEN PinmameGetHardwareGen()
 {
-	const UINT64 hardwareGen = (_isRunning) ? core_gameData->gen : 0;
+	const UINT64 hardwareGen = (_isRunning == 1 && core_gameData) ? core_gameData->gen : 0;
 	return (PINMAME_HARDWARE_GEN)hardwareGen;
 }
 
@@ -1133,7 +1192,7 @@ PINMAMEAPI PINMAME_HARDWARE_GEN PinmameGetHardwareGen()
 
 PINMAMEAPI int PinmameGetSwitch(const int swNo)
 {
-	return (_isRunning) ? vp_getSwitch(swNo) : 0;
+	return (_isRunning == 1) ? vp_getSwitch(swNo) : 0;
 }
 
 /******************************************************
@@ -1142,7 +1201,7 @@ PINMAMEAPI int PinmameGetSwitch(const int swNo)
 
 PINMAMEAPI void PinmameSetSwitch(const int swNo, const int state)
 {
-	if (!_isRunning)
+	if (_isRunning != 1)
 		return;
 
 	vp_putSwitch(swNo, state ? 1 : 0);
@@ -1154,7 +1213,7 @@ PINMAMEAPI void PinmameSetSwitch(const int swNo, const int state)
 
 PINMAMEAPI void PinmameSetSwitches(const PinmameSwitchState* const p_states, const int numSwitches)
 {
-	if (!_isRunning)
+	if (_isRunning != 1)
 		return;
 
 	for (int i = 0; i < numSwitches; ++i)
@@ -1503,6 +1562,25 @@ PINMAMEAPI int PinmameGetNVRAM(PinmameNVRAMState* const p_nvramStates)
 	}
 
 	return size;
+}
+
+/******************************************************
+ * PinmameGetSoundMode
+ ******************************************************/
+
+PINMAMEAPI PINMAME_SOUND_MODE PinmameGetSoundMode()
+{
+	return static_cast<PINMAME_SOUND_MODE>(pmoptions.sound_mode);
+}
+
+/******************************************************
+ * PinmameSetSoundMode
+ ******************************************************/
+
+PINMAMEAPI void PinmameSetSoundMode(const PINMAME_SOUND_MODE soundMode)
+{
+	pmoptions.sound_mode = soundMode;
+	libpinmame_log_info("PinmameSetSoundMode(): soundMode=%d", soundMode);
 }
 
 /******************************************************

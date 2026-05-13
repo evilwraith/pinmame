@@ -65,6 +65,13 @@ typedef enum {
 } PINMAME_AUDIO_FORMAT;
 
 typedef enum {
+	PINMAME_SOUND_MODE_DEFAULT = 0,
+	PINMAME_SOUND_MODE_ALTSOUND = 1,
+	PINMAME_SOUND_MODE_PINSOUND = 2,
+	PINMAME_SOUND_MODE_PINSOUND_RECORDINGS = 3
+} PINMAME_SOUND_MODE;
+
+typedef enum {
 	PINMAME_DISPLAY_TYPE_SEG16 = 0,                  // 16 segments
 	PINMAME_DISPLAY_TYPE_SEG16R = 1,                 // 16 segments with comma and period reversed
 	PINMAME_DISPLAY_TYPE_SEG10 = 2,                  // 9 segments and comma
@@ -446,6 +453,8 @@ PINMAMEAPI int PinmameGetHandleMechanics();
 PINMAMEAPI void PinmameSetHandleMechanics(const int handleMechanics);
 PINMAMEAPI PINMAME_DMD_MODE PinmameGetDmdMode();
 PINMAMEAPI void PinmameSetDmdMode(const PINMAME_DMD_MODE dmdMode);
+PINMAMEAPI PINMAME_SOUND_MODE PinmameGetSoundMode();
+PINMAMEAPI void PinmameSetSoundMode(const PINMAME_SOUND_MODE soundMode);
 PINMAMEAPI PINMAME_STATUS PinmameRun(const char* const p_name);
 PINMAMEAPI int PinmameIsRunning();
 PINMAMEAPI PINMAME_STATUS PinmamePause(const int pause);
