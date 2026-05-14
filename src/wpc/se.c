@@ -998,8 +998,8 @@ static WRITE_HANDLER(giaux_w) {
                      *seg++ = bits;
                   }
                }
-               // static double lastFrameTime = 0.0; printf("MiniDMD FPS: %8.5f\n", 1.0 / (timer_get_time() - lastFrameTime)); lastFrameTime = timer_get_time();
             }
+			// static double lastFrameTime = 0.0; printf("MiniDMD FPS: %8.5f\n", 1.0 / (timer_get_time() - lastFrameTime)); lastFrameTime = timer_get_time();
             selocals.prevMiniDMDCol = selocals.miniDMDcol;
          }
       }
