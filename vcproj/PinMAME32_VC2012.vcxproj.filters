@@ -1239,9 +1239,6 @@
     <ClCompile Include="..\src\ui\win32ui.c">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\sound\ymf262.c">
-      <Filter>Source Files\MAME\Sound</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\sound\262intf.c">
       <Filter>Source Files\MAME\Sound</Filter>
     </ClCompile>
@@ -1351,6 +1348,12 @@
       <Filter>Source Files\PinMAME\altsound</Filter>
     </ClCompile>
     <ClCompile Include="..\src\wpc\altsound\snd_alt.cpp">
+      <Filter>Source Files\PinMAME\altsound</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\wpc\altsound\miniaudio_bass_compat.cpp">
+      <Filter>Source Files\PinMAME\altsound</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\wpc\altsound\miniaudio_private.c">
       <Filter>Source Files\PinMAME\altsound</Filter>
     </ClCompile>
   </ItemGroup>
@@ -2054,9 +2057,6 @@
     <ClInclude Include="..\src\sound\262intf.h">
       <Filter>Source Files\MAME\Sound</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\sound\ymf262.h">
-      <Filter>Source Files\MAME\Sound</Filter>
-    </ClInclude>
     <ClInclude Include="..\ext\vgm\vgmwrite.h">
       <Filter>Source Files\external\vgm</Filter>
     </ClInclude>
@@ -2127,6 +2127,12 @@
       <Filter>Source Files\PinMAME\altsound</Filter>
     </ClInclude>
     <ClInclude Include="..\src\wpc\altsound\snd_alt.h">
+      <Filter>Source Files\PinMAME\altsound</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\wpc\altsound\miniaudio_bass_compat.hpp">
+      <Filter>Source Files\PinMAME\altsound</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\wpc\altsound\miniaudio_private.h">
       <Filter>Source Files\PinMAME\altsound</Filter>
     </ClInclude>
   </ItemGroup>

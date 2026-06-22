@@ -972,7 +972,8 @@ DRIVERNV(empsback)      //(Star Wars -) Empire Strikes Back, The
 // ----------------
 // IDSA GAMES
 // ----------------
-DRIVERNV(v1)            //V-1 (198?)
+DRIVERNV(v1)            //V-1 (05/1985)
+DRIVERNV(fantacar)      //Fantastic Car (04/1986)
 DRIVERNV(bsktball)      //Basket Ball (04/1987)
 
 // ----------------
@@ -1572,6 +1573,7 @@ DRIVERNV(dragfis3b)     //         06/20 Dragonfist (MOD 3 rev. 1109)
 DRIVERNV(dragfis14)     //         09/21 Dragonfist (MOD 14)
 DRIVERNV(dragfis15)     //         04/23 Dragonfist (MOD 15)
 DRIVERNV(dragfis16)     //         09/24 Dragonfist (MOD 16)
+DRIVERNV(dragfis17)     //         01/26 Dragonfist (MOD 17)
 DRIVERNV(orbitor1)      //MPU-200: 04/82 Orbitor 1
 DRIVERNV(orbitofp)      //         04/82 Orbitor 1 (Free Play)
 DRIVERNV(orbitora)      //         04/82 Orbitor 1 (MOD)
@@ -2698,6 +2700,8 @@ DRIVER(bnzai,t3)        //          10/11 W Banzai Run (L-3 Target sound fix)
 DRIVER(swrds,l1)        //S11-559:  06/88 W Swords of Fury (L-1)
 DRIVER(swrds,lg2)       //          06/88 W Swords of Fury (LG-2 German)
 DRIVER(swrds,l2)        //          06/88 W Swords of Fury (L-2)
+DRIVER(swrds,rr1)       //          05/26   Swords of Fury (Richrom/Lionman MOD V1)
+DRIVER(swrds,rr1b)      //          05/26   Swords of Fury (Richrom/Lionman MOD V1 / No Swords Sounds)
 DRIVER(taxi,p5)         //S11-553:  08/88 W Taxi (P-5)
 DRIVER(taxi,lu1)        //          08/88 W Taxi (Marilyn LU-1 Europe)
 DRIVER(taxi,lg1)        //          08/88 W Taxi (Marilyn LG-1 German)
@@ -3092,7 +3096,7 @@ DRIVER(dm,dh5b)         //                  Demolition Man (DH-5) with rude spee
 DRIVER(dm,h6)           //          08/95 W Demolition Man (H-6) with rude speech
 DRIVER(dm,h6b)          //                  Demolition Man (H-6) with rude speech (Coin Play)
 DRIVER(dm,h6c)          //          11/19   Demolition Man (H-6C Competition MOD) with rude speech
-//DRIVER(dm,h7)           //          03/22   Demolition Man (7.0) with rude speech
+//DRIVER(dm,h7)           //          03/22   Demolition Man (7.0 Competition MOD) with rude speech //commercial release
 DRIVER(dm,dt099)        //          04/14   Demolition Man (FreeWPC/Demolition Time 0.99)
 DRIVER(dm,dt101)        //          09/14   Demolition Man (FreeWPC/Demolition Time 1.01)
 DRIVER(tafg,h3)         //WPC-538:  08/94 B Addams Family Special Collectors Edition, The (Home version)
@@ -3108,6 +3112,7 @@ DRIVER(wcs,d2)          //                  World Cup Soccer (DX-2) LED Ghost Fi
 DRIVER(wcs,l3c)         //          06/16 B World Cup Soccer (LX-3C)
 DRIVER(wcs,la2)         //          02/94 B World Cup Soccer (LA-2)
 DRIVER(wcs,l1)          //          05/94 B World Cup Soccer (LX-1)
+DRIVER(wcs,la1)         //          05/94 B World Cup Soccer (LA-1)
 DRIVER(wcs,p2)          //          ??/?? B World Cup Soccer (PA-2 Prototype)
 DRIVER(wcs,p5)          //                  World Cup Soccer (PA-5 Prototype) LED Ghost Fix
 DRIVER(wcs,p3)          //          ??/?? B World Cup Soccer (PX-3 Prototype)
@@ -3151,7 +3156,7 @@ DRIVER(rs,da5)          //                  Red & Ted's Road Show (DA-5) LED Gho
 DRIVER(rs,lx5)          //          10/94 W Red & Ted's Road Show (LX-5)
 DRIVER(rs,dx5)          //                  Red & Ted's Road Show (DX-5) LED Ghost Fix
 DRIVER(rs,l6c)          //          05/19 W Red & Ted's Road Show (L6-C Competition MOD)
-//DRIVER(rs,l7)         //          11/20 W Red & Ted's Road Show (L-7) //Rev. 7.0, also done by Soren, but official now
+//DRIVER(rs,70)           //          11/20 W Red & Ted's Road Show (7.0 Competition MOD) //Rev. 7.0, also done by Soren, but official/commercial now
 DRIVER(ts,pa1)          //WPC-532:  11/94 B Shadow, The (PA-1 Prototype)
 DRIVER(ts,pa2)          //                  Shadow, The (PA-2) LED Ghost Fix
 DRIVER(ts,la2)          //          12/94 B Shadow, The (LA-2)
@@ -3188,6 +3193,7 @@ DRIVER(tom,14h)         //          10/96 B Theatre of Magic (1.4 Home version)
 DRIVER(tom,14hb)        //                  Theatre of Magic (1.4 Home version Coin Play)
 //DRIVER(tom,15c)       //          06/16 B Theatre of Magic (1.5C Competition MOD)  //outdated patch
 DRIVER(tom,13c)         //          10/19 B Theatre of Magic (1.3XC Competition MOD) //patch f0f8
+//DRIVER(tom,20)          //          10/21 B Theatre of Magic (2.0 Competition MOD)   //commercial release
 DRIVER(nf,08x)          //WPC-525:  04/95 W No Fear: Dangerous Sports (0.8 Export Prototype)
 DRIVER(nf,10f)          //          05/95 W No Fear: Dangerous Sports (1.0 French)
 DRIVER(nf,101)          //                  No Fear: Dangerous Sports (1.01) LED Ghost Fix
