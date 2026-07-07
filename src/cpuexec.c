@@ -210,6 +210,12 @@ static double perfect_interleave;
 // PinMame: time fence global offset
 volatile double time_fence_global_offset = 0.0;
 
+// PinMAME: while nonzero, the external time fence is IGNORED. Set by the OSD for the duration of the FastFrames measurement window
+// (unthrottled startup frames, see the OSD's render_frame/update_timing), so raw emulation speed can be measured even while a host (VPX) drives fences.
+// Once the window ends and this drops back to 0, the fence's existing realign/catch-up logic below
+// recovers on its own (ahead >= 1s: offset realign; less: bounded stall until the host's clock catches up)
+int time_fence_bypass = 0;
+
 
 /*************************************
  *
@@ -424,6 +430,12 @@ void cpu_run(void)
 			
 			/* execute CPUs */
 			cpu_timeslice();
+
+#if defined(LIBPINMAME)
+         extern int libpinmame_time_to_quit(void);
+         if (libpinmame_time_to_quit())
+            time_to_quit = 1;
+#endif
 
 			profiler_mark(PROFILER_END);
 		}
@@ -833,6 +845,9 @@ void cpunum_set_halt_line(int cpunum, int state)
 #define WINVER _WIN32_WINNT
 #endif
 #if defined(__GNUC__)
+#ifdef LONG_MAX
+#undef LONG_MAX
+#endif
 #define LONG_MAX 2147483647
 #endif
 #include <windows.h>
@@ -963,21 +978,16 @@ void time_fence_exit()
 static void cpu_timeslice(void)
 {
 #if defined(VPINMAME)
-	// Continuously pump message loop, otherwise it creates stutters between COM server and client (VPinMame locks VPX scripts until message are processed)
+	// Continuously pump message loop, otherwise it creates stutters between COM server and client (VPinMAME locks VPX scripts until message are processed)
 	// It also causes a deadlock if using a TimeFence since messages are normally processed by a CPU callback that may not happen depending on the TimeFence.
 	extern void win_process_events(void);
 	win_process_events();
 #endif
 
-#if defined(LIBPINMAME)
-	extern int libpinmame_time_to_quit(void);
-	if (libpinmame_time_to_quit())
-		time_to_quit = 1;
-#endif
-
 	// PinMAME: allow external synchronization by suspending emulation when a time fence is reached
 	// NOTE: if debugging stutter issues or the like, disable this mechanism in the core scripts, or directly here
-	if (options.time_fence != 0.0 && time_fence_is_supported())
+	// (time_fence_bypass: the FastFrames measurement window runs fence-free, see its definition above)
+	if (options.time_fence != 0.0 && !time_fence_bypass && time_fence_is_supported())
 	{
 		const double now = timer_get_time();
 		if (now - options.time_fence - time_fence_global_offset >= 0.)
