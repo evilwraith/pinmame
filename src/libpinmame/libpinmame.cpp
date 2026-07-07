@@ -1295,7 +1295,7 @@ PINMAMEAPI int PinmameGetSolenoid(const int solNo)
 
 PINMAMEAPI int PinmameGetChangedSolenoids(PinmameSolenoidState* const p_changedStates)
 {
-	if (!_isRunning)
+	if (_isRunning != 1)
 		return -1;
 
 	core_update_pwm_solenoids();
@@ -1337,7 +1337,7 @@ PINMAMEAPI int PinmameGetLamp(const int lampNo)
 
 PINMAMEAPI int PinmameGetChangedLamps(PinmameLampState* const p_changedStates)
 {
-	if (!_isRunning)
+	if (_isRunning != 1)
 		return -1;
 
 	core_update_pwm_lamps();
@@ -1379,7 +1379,7 @@ PINMAMEAPI int PinmameGetGI(const int giNo)
 
 PINMAMEAPI int PinmameGetChangedGIs(PinmameGIState* const p_changedStates)
 {
-	if (!_isRunning)
+	if (_isRunning != 1)
 		return -1;
 
 	core_update_pwm_gis();
@@ -1406,7 +1406,7 @@ PINMAMEAPI int PinmameGetMaxLEDs()
 
 PINMAMEAPI int PinmameGetChangedLEDs(const uint64_t mask, const uint64_t mask2, PinmameLEDState* const p_changedStates)
 {
-	if (!_isRunning)
+	if (_isRunning != 1)
 		return -1;
 
 	core_update_pwm_segments();
@@ -1589,7 +1589,7 @@ PINMAMEAPI void PinmameSetSoundMode(const PINMAME_SOUND_MODE soundMode)
 
 PINMAMEAPI int PinmameGetChangedNVRAM(PinmameNVRAMState* const p_nvramStates)
 {
-	if (!_isRunning)
+	if (_isRunning != 1)
 		return -1;
 
 	if (!(Machine && Machine->drv && Machine->drv->nvram_handler))
