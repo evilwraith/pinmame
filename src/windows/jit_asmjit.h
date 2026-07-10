@@ -2,7 +2,8 @@
  *   C-callable API for the asmjit-based ARM7 JIT controller
  *
  *   The emulator core (C) calls these to translate-and-run blocks. Active only when PINMAME_JIT_ASMJIT is defined;
- *   otherwise the emulator uses the interpreter (and/or the legacy x86-only JIT)
+ *   otherwise the emulator uses the interpreter (and/or the legacy x86-32bit-only JIT).
+ *   Host backends: x86/x64 and AArch64 (selected at compile time, see AJ_HOST_* in jit_asmjit.cpp)
  */
 
 #ifndef INC_JIT_ASMJIT
@@ -25,6 +26,9 @@ typedef struct ArmAsmjitCtl ArmAsmjitCtl;
 typedef uint32_t (*arm7_block_fn)(void *cpu_ctx);
 
 /* Create/destroy a controller covering [minAddr, maxAddr) of opcode space.
+ * Create probes once whether the process may map executable JIT memory (iOS
+ * denies W^X to third-party apps); on denial the controller stays permanently
+ * disabled and the interpreter runs -- no caller-side handling needed.
  * Create early (arm7_core_init) so the pointer lands in MAME's CPU-context
  * snapshot and survives set_context; pass an empty range and set it later */
 ArmAsmjitCtl *arm7_aj_create(uint32_t minAddr, uint32_t maxAddr);
