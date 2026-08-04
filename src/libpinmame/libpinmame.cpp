@@ -34,7 +34,7 @@ int g_fDumpFrames = 0;
 int g_fPause = 0;
 PINMAME_DMD_MODE g_fDmdMode = PINMAME_DMD_MODE_BRIGHTNESS;
 
-char g_szGameName[256] = {}; //!! not set yet
+char g_szGameName[256] = {}; // String containing requested game name (may be different from ROM if aliased), set by PinmameRun
 }
 
 static std::atomic_int _isRunning { 0 };
@@ -1092,6 +1092,8 @@ PINMAMEAPI PINMAME_STATUS PinmameRun(const char* const p_name)
 		return PINMAME_STATUS_GAME_NOT_FOUND;
 
 	OnStateChange(2); // Starting state (in between stopped and started)
+	strncpy(g_szGameName, p_name, sizeof(g_szGameName) - 1);
+	g_szGameName[sizeof(g_szGameName) - 1] = '\0';
 
 	vp_init();
 
