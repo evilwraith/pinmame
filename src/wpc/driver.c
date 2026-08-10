@@ -3322,6 +3322,22 @@ DRIVER(tfdmd,l3)        //WPC-584T: 09/91   Test fixture DMD
 DRIVER(tfs,12)          //WPC-584S: 01/95   Test fixture Security
 DRIVER(tf95,12)         //WPC-648:  01/95   Test fixture WPC95
 
+#if HAS_MEDIAGX
+DRIVER(rfm,180)         //          09/03   Pinball 2000: Revenge From Mars (1.80)
+DRIVER(rfm,160)         //          09/03   Pinball 2000: Revenge From Mars (1.60)
+DRIVER(rfm,150)         //          07/00   Pinball 2000: Revenge From Mars (1.50)
+DRIVER(rfm,140)         //          01/00   Pinball 2000: Revenge From Mars (1.40)
+DRIVER(rfm,120)         //          06/99   Pinball 2000: Revenge From Mars (1.20)
+DRIVER(swep1,150)       //          07/00   Pinball 2000: Star Wars Episode I (1.50)
+DRIVER(swep1,140)       //          07/00   Pinball 2000: Star Wars Episode I (1.40)
+DRIVER(swep1,130)       //          09/99   Pinball 2000: Star Wars Episode I (1.30)
+#endif
+
+#ifdef PIN2K_SOUND_TEST
+DRIVERNV(pin2ksnd)      //                  Pinball 2000 DCS2 sound board test harness, RFM  (see docs/pin2k_sound.md)
+DRIVERNV(pin2ksw1)      //                  Pinball 2000 DCS2 sound board test harness, SWEP1
+#endif
+
 // ------------------
 // ZACCARIA GAMES
 // ------------------
@@ -3461,10 +3477,5 @@ DRIVERNV(nstrphnx)      //08/87 New Star's Phoenix (same roms as strsphnx)
 DRIVERNV(nstrphnf)      //      New Star's Phoenix (French Speech)
 DRIVERNV(nstrphfp)      //      New Star's Phoenix (Free Play)
 DRIVERNV(nstrpffp)      //      New Star's Phoenix (French Speech Free Play)
-
-#ifdef PIN2K_SOUND_TEST
-DRIVERNV(pin2ksnd)      //      Pinball 2000 DCS2 sound board test harness, RFM  (see docs/pin2k_sound.md)
-DRIVERNV(pin2ksw1)      //      Pinball 2000 DCS2 sound board test harness, SWE1
-#endif
 
 #endif /* DRIVER_RECURSIVE */

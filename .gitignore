@@ -6,6 +6,10 @@ build/
 /release/
 .DS_Store
 
+# Pinball 2000 subsystem (src/p2k): self-test binary
+/p2ktest
+/p2kboot
+
 # Remote debugger (src/remote_debug): generated header + test/run artifacts
 /src/remote_debug/ui_html.h
 /src/remote_debug/*.bin
