@@ -139,53 +139,85 @@ struct p2k_bus_callbacks
 	void *ctx;
 };
 
-// A window of plain backing store that the space may reach directly, skipping the callback and
-// the machine's range decode behind it. Only for ranges that are pure memory: no side effect on
-// access, no device behind them. The machine registers these; see address_space::add_fast_window.
-struct p2k_fast_window
-{
-	u32 base;    // first address in the window
-	u32 span;    // size - 3, so an aligned dword fits iff (addr - base) < span
-	u8 *mem;     // backing store for base
-};
-
 class address_space final
 {
 public:
 	explicit address_space(const p2k_bus_callbacks &cb) : m_cb(cb) {}
 
+	// Hotspot for Pin2K emu, so the fast window lookup happens up front and on the byte
+	// address itself: a hit is one load, with no dword to assemble, mask or shift back down.
+	// Endian-neutral - *p is the byte living at `a` on any host, which is precisely what the
+	// load32/shift pair in the fallback computes.
+	// The miss path goes straight to the callback and does NOT re-enter through r32(), so a
+	// non-fast access looks the fast windows up once, not twice. What buys that is the trimming in
+	// add_fast_window(): with a dword-aligned base and a whole number of dwords, a byte or word
+	// that misses here cannot be inside the window at its aligned dword address either - see the
+	// proof there. Only the masked dword overloads still use r32()/w32(), and those look up once
 	ATTR_FORCE_INLINE u8 read_byte(offs_t a)
 	{
-		unsigned shift = (a & 3) * 8;
-		return u8(r32(a & ~3u, 0xffu << shift) >> shift);
+		if (const u8 *p = fast(a)) return *p;
+		const unsigned shift = (a & 3) * 8;
+		return u8(m_cb.read32(m_cb.ctx, a & ~3u, 0xffu << shift) >> shift);
 	}
-	ATTR_FORCE_INLINE u16 read_word(offs_t a) { return read_word(a, 0xffff); }
+	// Same shape as read_byte. The word the dword form would shift out of the bus lives at
+	// `a & ~1u` - (a & ~3u) + (a & 2) - so look the window up there and load just those two
+	// bytes; a hit puts the offset at span - 2 or less, so both bytes are inside.
+	//
+	// The full-width overloads here and below are spelled out rather than forwarded to the masked
+	// ones with an all-ones mask. Folding `& 0xffff` or a blend against `~mask == 0` away is
+	// trivial for an optimizer, but it is only guaranteed once the callee has actually been
+	// inlined - and these are hot paths, so they should not depend on it
+	ATTR_FORCE_INLINE u16 read_word(offs_t a)
+	{
+		if (const u8 *p = fast(a & ~1u)) return load16(p);
+		const unsigned shift = (a & 2) * 8;
+		return u16(m_cb.read32(m_cb.ctx, a & ~3u, 0xffffu << shift) >> shift);
+	}
 	ATTR_FORCE_INLINE u16 read_word(offs_t a, u16 mask)
 	{
-		unsigned shift = (a & 2) * 8;
-		return u16(r32(a & ~3u, u32(mask) << shift) >> shift);
+		if (const u8 *p = fast(a & ~1u)) return u16(load16(p) & mask);
+		const unsigned shift = (a & 2) * 8;
+		return u16(m_cb.read32(m_cb.ctx, a & ~3u, u32(mask) << shift) >> shift);
 	}
 	ATTR_FORCE_INLINE u16 read_word_unaligned(offs_t a) { return read_word(a); }
 	ATTR_FORCE_INLINE u16 read_word_unaligned(offs_t a, u16 mask) { return read_word(a, mask); }
-	ATTR_FORCE_INLINE u32 read_dword(offs_t a) { return r32(a & ~3u, 0xffffffff); }
+	ATTR_FORCE_INLINE u32 read_dword(offs_t a)
+	{
+		if (const u8 *p = fast(a & ~3u)) return load32(p);
+		return m_cb.read32(m_cb.ctx, a & ~3u, 0xffffffff);
+	}
 	ATTR_FORCE_INLINE u32 read_dword(offs_t a, u32 mask) { return r32(a & ~3u, mask); }
 	ATTR_FORCE_INLINE u32 read_dword_unaligned(offs_t a) { return read_dword(a); }
 	ATTR_FORCE_INLINE u32 read_dword_unaligned(offs_t a, u32 mask) { return read_dword(a, mask); }
 
+	// The write side of the same idea, and it saves more than the read side does: a hit stores
+	// the one byte outright, where w32() had to read the dword back, blend and store it again
 	ATTR_FORCE_INLINE void write_byte(offs_t a, u8 d)
 	{
-		unsigned shift = (a & 3) * 8;
-		w32(a & ~3u, u32(d) << shift, 0xffu << shift);
+		if (u8 *p = fast(a)) { *p = d; return; }
+		const unsigned shift = (a & 3) * 8;
+		m_cb.write32(m_cb.ctx, a & ~3u, u32(d) << shift, 0xffu << shift);
 	}
-	ATTR_FORCE_INLINE void write_word(offs_t a, u16 d) { write_word(a, d, 0xffff); }
+	ATTR_FORCE_INLINE void write_word(offs_t a, u16 d)
+	{
+		if (u8 *p = fast(a & ~1u)) { store16(p, d); return; }
+		const unsigned shift = (a & 2) * 8;
+		m_cb.write32(m_cb.ctx, a & ~3u, u32(d) << shift, 0xffffu << shift);
+	}
 	ATTR_FORCE_INLINE void write_word(offs_t a, u16 d, u16 mask)
 	{
-		unsigned shift = (a & 2) * 8;
-		w32(a & ~3u, u32(d) << shift, u32(mask) << shift);
+		if (u8 *p = fast(a & ~1u)) { store16(p, u16((load16(p) & u16(~mask)) | (d & mask))); return; }
+		const unsigned shift = (a & 2) * 8;
+		m_cb.write32(m_cb.ctx, a & ~3u, u32(d) << shift, u32(mask) << shift);
 	}
 	ATTR_FORCE_INLINE void write_word_unaligned(offs_t a, u16 d) { write_word(a, d); }
 	ATTR_FORCE_INLINE void write_word_unaligned(offs_t a, u16 d, u16 mask) { write_word(a, d, mask); }
-	ATTR_FORCE_INLINE void write_dword(offs_t a, u32 d) { w32(a & ~3u, d, 0xffffffff); }
+	// A full-width store needs no read-back to blend into, so it does not go through w32()
+	ATTR_FORCE_INLINE void write_dword(offs_t a, u32 d)
+	{
+		if (u8 *p = fast(a & ~3u)) { store32(p, d); return; }
+		m_cb.write32(m_cb.ctx, a & ~3u, d, 0xffffffff);
+	}
 	ATTR_FORCE_INLINE void write_dword(offs_t a, u32 d, u32 mask) { w32(a & ~3u, d, mask); }
 	ATTR_FORCE_INLINE void write_dword_unaligned(offs_t a, u32 d) { write_dword(a, d); }
 	ATTR_FORCE_INLINE void write_dword_unaligned(offs_t a, u32 d, u32 mask) { write_dword(a, d, mask); }
@@ -195,12 +227,54 @@ public:
 	// call and a chain of range compares for the accesses that make up most of the traffic.
 	// Only valid for ranges with no side effect on access; anything a device watches must not be
 	// registered, and neither must anything while a bus probe is armed.
+	//
+	// The head is trimmed up to the next dword boundary and the tail down to a whole dword. Both
+	// are load-bearing rather than tidiness, because fast() is entered with a byte, word OR dword
+	// address and the two properties are what make that safe:
+	//
+	//   in bounds  - with base dword-aligned, an offset keeps the alignment of its address, so a
+	//                hit at off means off is 0/2/4-aligned to match the width; with span a whole
+	//                number of dwords, off < span then puts the last byte of the access at
+	//                off + w - 1 <= span - 1. Without the alignment a dword could hit at off =
+	//                span - 2 and read two bytes past the buffer.
+	//   miss agrees - if a byte or word misses, the dword covering it misses too: off & ~3 is the
+	//                largest multiple of 4 not above off, and span is a multiple of 4, so
+	//                off >= span implies off & ~3 >= span. That is what lets the byte and word
+	//                paths go straight to the callback instead of looking the window up a second
+	//                time through r32()/w32().
+	//
+	// Trimming does not narrow what the dword path reaches: its offsets are multiples of 4, and
+	// off < 4*floor(size/4) is the same set as the old off < size-3
 	void add_fast_window(u32 base, u8 *mem, size_t size)
 	{
-		if (m_fast_n >= MAX_FAST || size < 4 || !mem) return;
-		m_fast[m_fast_n++] = { base, u32(size - 3), mem };
+		if (m_fast_n >= MAX_FAST || !mem) return;
+		const u32 head = (0u - base) & 3u; // bytes up to the next dword boundary
+		if (size <= head) return;
+		base += head; mem += head; size -= head;
+		size &= ~size_t(3);
+		if (size < 4) return;
+		m_fast[m_fast_n++] = { base, u32(size), uintptr_t(mem) - base };
 	}
-	void clear_fast_windows() { m_fast_n = 0; }
+	// Zeroing the slots is the part that actually disarms them: fast() tests all MAX_FAST entries
+	// unconditionally and never consults m_fast_n, so resetting the count alone would leave every
+	// registered window still live - exactly the wrong outcome for the bus-probe case above.
+	// A zeroed slot has span 0, and u32(a - 0) < 0 is false for every a, so it can never match
+	void clear_fast_windows() { for (auto &w : m_fast) w = {}; m_fast_n = 0; }
+
+	// Hand out the window containing `a` as a pre-biased pointer plus its range, so a caller that
+	// walks a run of sequential addresses can serve them itself instead of coming back per byte.
+	// The i386 core's FETCH cursor uses this; see fetch_slow() in mame/cpu/i386/i386.cpp. Same
+	// first-match rule as fast(), and an empty slot has span 0 so it can never match.
+	//
+	// The caller owns the invalidation: this range stays correct only while the windows are the
+	// ones registered here (they are installed once, at machine build) AND while the caller's own
+	// address translation is the identity - which for the i386 means paging off and A20 unmasked
+	bool direct_range(offs_t a, uintptr_t &adj, u32 &lo, u32 &len) const
+	{
+		for (const auto &w : m_fast)
+			if (u32(a - w.base) < w.span) { adj = w.adj; lo = w.base; len = w.span; return true; }
+		return false;
+	}
 
 	static constexpr int data_width() { return 32; }
 	template <typename... T> memory_passthrough_handler *install_read_tap(T &&...)      { return nullptr; }
@@ -231,21 +305,39 @@ private:
 		std::memcpy(p, &v, 4);
 #endif
 	}
+	static ATTR_FORCE_INLINE u16 load16(const u8 * const p)
+	{
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+		return u16(u16(p[0]) | (u16(p[1]) << 8));
+#else
+		u16 v; std::memcpy(&v, p, 2); return v;
+#endif
+	}
+	static ATTR_FORCE_INLINE void store16(u8 * const p, u16 v)
+	{
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+		p[0] = u8(v); p[1] = u8(v >> 8);
+#else
+		std::memcpy(p, &v, 2);
+#endif
+	}
 
-	// `a` is always dword-aligned here. The unsigned subtraction folds the lower bound into the
-	// same compare as the upper one.
+	// `a` is dword-aligned from r32()/w32() and a raw byte address from read_byte(). The unsigned
+	// subtraction folds the lower bound into the same compare as the upper one. Every registered
+	// window has a dword-aligned base, so a byte hit implies a hit on its aligned address too -
+	// the byte form never reaches memory the dword form would have left to the callback
 	ATTR_FORCE_INLINE u8 *fast(const offs_t a) const
 	{
-		assert(m_fast_n == MAX_FAST);
+		// This runs for EVERY space, as e.g. the I/O space legitimately has none registered.
+		// The count is not what makes the unrolled form below safe anyway: unregistered slots stay
+		// zeroed, and u32(a - 0) < 0 is false for every a, so an empty slot can never match
 		static_assert(MAX_FAST == 4);
 
-		/*for (unsigned i = 0; i < m_fast_n; i++)
-			if (u32(a - m_fast[i].base) < m_fast[i].span) return m_fast[i].mem + (a - m_fast[i].base);*/
-
-		if (u32(a - m_fast[0].base) < m_fast[0].span) return m_fast[0].mem + (a - m_fast[0].base);
-		if (u32(a - m_fast[1].base) < m_fast[1].span) return m_fast[1].mem + (a - m_fast[1].base);
-		if (u32(a - m_fast[2].base) < m_fast[2].span) return m_fast[2].mem + (a - m_fast[2].base);
-		if (u32(a - m_fast[3].base) < m_fast[3].span) return m_fast[3].mem + (a - m_fast[3].base);
+		// Note: A branchless SSE2/NEON form that tested all four at once was tried and removed as it was way slower
+		if (u32(a - m_fast[0].base) < m_fast[0].span) return reinterpret_cast<u8 *>(m_fast[0].adj + a);
+		if (u32(a - m_fast[1].base) < m_fast[1].span) return reinterpret_cast<u8 *>(m_fast[1].adj + a);
+		if (u32(a - m_fast[2].base) < m_fast[2].span) return reinterpret_cast<u8 *>(m_fast[2].adj + a);
+		if (u32(a - m_fast[3].base) < m_fast[3].span) return reinterpret_cast<u8 *>(m_fast[3].adj + a);
 		return nullptr;
 	}
 
@@ -260,8 +352,32 @@ private:
 		m_cb.write32(m_cb.ctx, a, d, mask);
 	}
 
+	// Windows of plain backing store that the space may reach directly, skipping the callback and
+	// the machine's range decode behind it. Only for ranges that are pure memory: no side effect on
+	// access, no device behind them. The machine registers these; see address_space::add_fast_window.
+
+	struct win
+	{
+		u32 base;    // first address, always dword-aligned (add_fast_window trims it)
+		u32 span;    // usable size, always a whole number of dwords: an access fits iff off < span
+		// The backing store, pre-biased: uintptr_t(mem) - base. A hit is then `adj + a`, which is
+		// a single x86 addressing mode, where storing `mem` would put a sub AND an add on the
+		// load's critical path.
+		//
+		// uintptr_t, not u8*: on a 32-bit build with a high base (0xc0800000) this wraps, which is
+		// well-defined for an unsigned integer and folds back to the right address mod 2^32, where
+		// forming the same value as a pointer would be undefined behaviour
+		uintptr_t adj;
+	};
+	// 16 bytes each, so the four windows are exactly one 64-byte line and the aligned table never
+	// straddles two. Each entry is also self-contained: a hit reads base, span and adj from the
+	// same 16 bytes, rather than from three arrays 16 bytes apart.
+	//
+	// Ordered hottest first: m_fast on every access, m_cb on every miss, m_fast_n only when a
+	// window is registered - fast() deliberately never reads it. Everything after m_fast lands in
+	// the second line either way, so this is for legibility only
+	alignas(64) win m_fast[MAX_FAST] {};
 	p2k_bus_callbacks m_cb;
-	p2k_fast_window m_fast[MAX_FAST] {};
 	unsigned m_fast_n = 0;
 };
 
@@ -1055,7 +1171,6 @@ public:
 	void set_input_line_and_vector(int line, int state, int vector) { execute_set_input(line, state); }
 
 	void set_icountptr(int &icount) { m_icountptr = &icount; }
-	int total_cycles() const { return m_total_cycles; }
 	void eat_cycles(int c) { if (m_icountptr) *m_icountptr -= c; }
 	template <typename T> void pulse_input_line(int line, T &&)
 	{ execute_set_input(line, ASSERT_LINE); execute_set_input(line, CLEAR_LINE); }
@@ -1324,17 +1439,17 @@ inline void emu_timer::adjust(attotime start_delay, s32 param, attotime period)
 	}
 	else
 	{
-		m_expire = (m_device ? m_device->machine() : *device_t::s_machine).time() + start_delay;
+		m_expire = device_t::s_machine->time() + start_delay;
 		m_enabled = true;
 	}
 }
 
 inline attotime emu_timer::elapsed() const
-{ return (m_device ? m_device->machine() : *device_t::s_machine).time() - (m_expire - m_period); }
+{ return device_t::s_machine->time() - (m_expire - m_period); }
 
 inline attotime emu_timer::remaining() const
 {
-	attotime now = (m_device ? m_device->machine() : *device_t::s_machine).time();
+	attotime now = device_t::s_machine->time();
 	return (m_expire > now) ? m_expire - now : attotime::zero;
 }
 
