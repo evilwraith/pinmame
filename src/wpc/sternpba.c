@@ -52,15 +52,31 @@ static struct {
   void  (*set_switch_state)(int, int, int);
   void  (*set_dedicated_switch_state)(int, int, int);
   int   (*get_coil_state)(int);
-  int   (*get_lamp_state)(int, int);
+  int   (*get_lamp_color)(int, int, void *);
+  int   (*get_motor_pos)(void);
+  int   (*get_lcd_frame)(void);
   INT16*(*get_sound_buffer)(int *);
+
 } spa;
+
+/*-- Lamps.
+    The core drives RGB LEDs, which PinMAME has no concept of, so each colour
+    channel is carried as its own lamp the way the VPinSPA fork did it: a run of
+    values starting at lamp number 81, with most lamps contributing one channel
+    and a handful expanding to three consecutive lamps. The table depends on
+    that numbering -- it reads Slimer's motor position from lamp 281, which is
+    entry 200 of this run (200 + 81), and its own debug line spells the offset
+    out as "18+81". Lamp number is index+1, so the run starts at index 80. --*/
+#define SPA_LAMP_BASE    80
+#define SPA_LAMP_COUNT   203
+#define SPA_LAMP_SOURCES 150
 
 static struct {
   spa_object *core;
   UINT8  *fbuffer, *bbuffer;
   int     coindoor;
   int     loaded;
+  int     halfstep;      /* display and lamps run at half the step rate */
   /*-- audio ring, filled from the core and drained by the mixer --*/
   INT16   samplebuf[2][SPA_SNDBUFSIZE];
   INT16   lastsamp[2];
@@ -188,7 +204,9 @@ static int spa_resolve_exports(void) {
     { "stern_set_switch_state_fn",           (void **)&spa.set_switch_state, 0 },
     { "stern_set_dedicated_switch_state_fn", (void **)&spa.set_dedicated_switch_state, 0 },
     { "stern_get_coil_state_fn",             (void **)&spa.get_coil_state, 0 },
-    { "stern_get_lamp_state_fn",             (void **)&spa.get_lamp_state, 0 },
+    { "stern_get_lamp_color",                (void **)&spa.get_lamp_color, 0 },
+    { "stern_get_motor_pos_fn",              (void **)&spa.get_motor_pos, 0 },
+    { "stern_get_lcd_frame_fn",              (void **)&spa.get_lcd_frame, 0 },
     { "stern_get_sound_buffer",              (void **)&spa.get_sound_buffer, 0 },
   };
   int i;
@@ -247,6 +265,16 @@ static MACHINE_INIT(spa) {
   core_dmd_pwm_init(core_gameData->lcdLayout, CORE_DMD_PWM_PREINTEGRATED_SAM,
                     CORE_DMD_PWM_PREINTEGRATED_SAM, 0);
 
+  /*-- The core reports a brightness per lamp channel rather than a strobed
+      matrix, so the lamps are published as modulated outputs and the integrator
+      is told to leave the driver's values alone. This game has no legacy lamp
+      matrix to fall back on, so the physics-output path is switched on here
+      rather than left to a user setting (core.c does the same for alpha
+      segments, sam.c for PWM in general). --*/
+  options.usemodsol |= CORE_MODOUT_ENABLE_PHYSOUT_LAMPS;
+  coreGlobals.nLamps = SPA_LAMP_BASE + SPA_LAMP_COUNT;
+  core_set_pwm_output_type(CORE_MODOUT_LAMP0, coreGlobals.nLamps, CORE_MODOUT_NONE);
+
   spalocals.loaded = 1;
   printf("SPA: %s running\n", spa_corelib);
 }
@@ -290,6 +318,66 @@ static SWITCH_UPDATE(spa) {
 
 static int spa_getSol(int solNo) { return 0; }
 
+/*-- Read every lamp channel out of the core and publish it as a modulated
+    output, so VPX sees a brightness rather than on/off. Channel layout and the
+    per-lamp special cases are the fork's, which is what the table was built
+    against. --*/
+static void spa_update_lamps(void) {
+  UINT8 level[SPA_LAMP_COUNT];
+  UINT8 clr[64];
+  int i, z, dst = 0;
+
+  if (!spa.get_lamp_color) return;
+  memset(level, 0, sizeof(level));
+
+  for (i = 0; i < SPA_LAMP_SOURCES && dst < SPA_LAMP_COUNT - 3; i++) {
+    memset(clr, 0, sizeof(clr));
+    spa.get_lamp_color(i, 0, clr);
+    /*-- the core hands back a reduced, halved value; undo it --*/
+    for (z = 0; z < 3; z++) clr[z] = (UINT8)((clr[z] + 0x40) * 2);
+
+    switch (i) {
+      /*-- second and third channels of an RGB group, consumed with the first --*/
+      case 26: case 27: case 41: case 42: case 46: case 47: case 50: case 51:
+      case 62: case 63: case 80: case 81: case 86: case 87: case 97: case 98:
+      case 108: case 109:
+        break;
+      /*-- the core never reports 46/47, so this one can only be driven white --*/
+      case 45:
+        level[dst++] = clr[0]; level[dst++] = clr[0]; level[dst++] = clr[0];
+        break;
+      case 28: case 43: case 52: case 64: case 82: case 88:
+        level[dst++] = clr[2]; level[dst++] = clr[1]; level[dst++] = clr[0];
+        break;
+      case 96: case 107:
+        level[dst++] = clr[0]; level[dst++] = clr[1]; level[dst++] = clr[2];
+        break;
+      case 122:
+        level[dst++] = clr[1];
+        break;
+      default:
+        level[dst++] = clr[0];
+        break;
+    }
+  }
+
+  /*-- the ecto GI is mapped to 0 alongside 110, so mirror a working neighbour --*/
+  level[123] = level[119];
+  level[131] = level[143];
+
+  /*-- not lamps at all: the table reads Slimer's motor position and the LCD
+      frame number out of this run --*/
+  if (spa.get_motor_pos) level[200] = (UINT8)spa.get_motor_pos();
+  if (spa.get_lcd_frame) {
+    const int frame = spa.get_lcd_frame();
+    level[201] = (UINT8)(frame & 0xff);
+    level[202] = (UINT8)((frame >> 8) & 0xff);
+  }
+
+  for (i = 0; i < SPA_LAMP_COUNT; i++)
+    coreGlobals.physicOutputState[CORE_MODOUT_LAMP0 + SPA_LAMP_BASE + i].value = level[i] * (1.0f / 255.0f);
+}
+
 /*----------------------------
 /  Clocking the core
 /-----------------------------*/
@@ -317,6 +405,21 @@ static void spa_vblank(int data) {
   if (spa.step_rate) spa.step_rate(1.0f / (float)SPA_STEPRATE);
   else               spa.step();
 
+  /*-- Audio out. Stays on the fast path: the mixer drains this ring
+      continuously, and topping it up only every other step would underrun. --*/
+  if (spa.get_sound_buffer) {
+    while (spa_sndbufferlength() < SPA_SNDBUFSIZE - 800) {
+      int count = 0;
+      INT16 *audio = spa.get_sound_buffer(&count);
+      if (!audio || count <= 0) break;
+      for (i = 0; i < count; i++) {
+        spalocals.samplebuf[0][spalocals.sampnum] = audio[i];
+        spalocals.samplebuf[1][spalocals.sampnum] = audio[i];
+        if (++spalocals.sampnum == SPA_SNDBUFSIZE) spalocals.sampnum = 0;
+      }
+    }
+  }
+
   /*-- solenoids out. Coils 2 and 3 are the flippers; mirror them into the
       dedicated flipper bits so the table sees them where VPX expects. --*/
   if (spa.get_coil_state) {
@@ -331,17 +434,16 @@ static void spa_vblank(int data) {
     }
   }
 
-  /*-- lamps out. The core's lamps are RGB LEDs and this reduces them to the
-      on/off matrix PinMAME carries; colour is not represented yet. --*/
-  if (spa.get_lamp_state) {
-    int col, row;
-    for (col = 0; col < CORE_STDLAMPCOLS; col++) {
-      UINT8 bits = 0;
-      for (row = 0; row < 8; row++)
-        if (spa.get_lamp_state(col, row)) bits |= (1 << row);
-      coreGlobals.lampMatrix[col] = bits;
-    }
-  }
+  /*-- The core is stepped at 120 Hz but only produces a display at half that,
+      and the DMD ring holds two frames against a 60 Hz reader. Submitting on
+      every step therefore throws away every other frame, and the frames that
+      survive are not evenly spaced, which shows up as stutter in animations.
+      Publish the display and lamps on alternate steps instead, as the fork
+      did. Solenoids stay on the fast path, where their timing matters. --*/
+  spalocals.halfstep ^= 1;
+  if (spalocals.halfstep) return;
+
+  spa_update_lamps();
 
   /*-- DMD out. The front buffer holds 4 brightness bits plus 4 transparency
       bits; a dot with transparency set shows the background page through it.
@@ -352,20 +454,6 @@ static void spa_vblank(int data) {
     frame[i] = dot & 0x0f;   /* the decoder expects 4 bits, nothing wider */
   }
   core_dmd_submit_frame(core_gameData->lcdLayout, frame, 1);
-
-  /*-- audio out --*/
-  if (spa.get_sound_buffer) {
-    while (spa_sndbufferlength() < SPA_SNDBUFSIZE - 800) {
-      int count = 0;
-      INT16 *audio = spa.get_sound_buffer(&count);
-      if (!audio || count <= 0) break;
-      for (i = 0; i < count; i++) {
-        spalocals.samplebuf[0][spalocals.sampnum] = audio[i];
-        spalocals.samplebuf[1][spalocals.sampnum] = audio[i];
-        if (++spalocals.sampnum == SPA_SNDBUFSIZE) spalocals.sampnum = 0;
-      }
-    }
-  }
 }
 
 /*-- The core keeps its state in a 128 MB buffer reached through
