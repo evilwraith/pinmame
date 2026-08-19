@@ -741,7 +741,19 @@ else()
       src/libpinmame/ticker.c
    )
 endif()
-   
+
+# Stern Pinball Arcade. The driver loads FarSight's native aarch64 emulation
+# cores through a small ELF loader, so it only builds where those cores can run.
+if(PLATFORM STREQUAL "linux" AND ARCH STREQUAL "aarch64")
+   list(APPEND PINMAME_SOURCES
+      src/wpc/sternpba.c
+      src/wpc/spa_elf.c
+      src/wpc/spa_elf.h
+      src/wpc/spa_bionic.c
+   )
+   add_compile_definitions(SPA_NATIVE_CORE)
+endif()
+
 set(PINMAME_INCLUDE_DIRS
    src
    src/wpc

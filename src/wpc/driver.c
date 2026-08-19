@@ -1878,6 +1878,10 @@ DRIVERNV(gpr301f)       //           09/05 Grand Prix (3.01 French)
 DRIVERNV(gpr301i)       //           09/05 Grand Prix (3.01 Italian)
 DRIVERNV(dalejr)        //Whitestar: 07/06 Dale Jr. (NASCAR 5.00)
                         //Whitestar: ??/06 The Brain (Simpsons Pinball Party conversion)
+#ifdef SPA_NATIVE_CORE
+// Stern Pinball Arcade — drives FarSight's native emulation cores (sternpba.c)
+DRIVER(spagb,100)       //SPIKE:  ??/16 Ghostbusters LE
+#endif /* SPA_NATIVE_CORE */
 // S.A.M. System
 DRIVER(sam1_flashb,0102)//S.A.M.: 02/06 S.A.M. System Flash Boot - V1.02
 DRIVER(sam1_flashb,0106)//S.A.M.: 08/06 S.A.M. System Flash Boot - V1.06
