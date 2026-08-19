@@ -77,6 +77,7 @@ static struct {
   int     coindoor;
   int     loaded;
   int     halfstep;      /* display and lamps run at half the step rate */
+  int     service;       /* coin-door button bits, applied as dedicated switches */
   /*-- audio ring, filled from the core and drained by the mixer --*/
   INT16   samplebuf[2][SPA_SNDBUFSIZE];
   INT16   lastsamp[2];
@@ -92,23 +93,30 @@ extern void  spa_bionic_register(spa_object *o, const char *name);
 /*-------------------
 /  Machine driver
 /--------------------*/
-/*-- Common inports. Inherited from SAM; the SPIKE cabinet switches match. --*/
+/*-- Cabinet inports.
+    These are SPIKE switch numbers taken from the Ghostbusters LE service
+    manual's switch reference (§3.2), which the table script agrees with -- it
+    drives 76, 78, 79 and 89 by those numbers directly. An earlier version of
+    this driver inherited SAM's matrix columns instead, which land somewhere
+    else entirely on this game: the coin bits fell on switches 65-68 (drop
+    target optos and Slimer Hit) and start/tournament fell on 15 and 16, which
+    are two of the trough switches. --*/
 #define SPA_COMPORTS \
   PORT_START /* 0 */ \
-    COREPORT_BITDEF(  0x0010, IPT_TILT,           KEYCODE_INSERT)  \
-    COREPORT_BIT   (  0x0020, "Slam Tilt",        KEYCODE_HOME)  \
-    COREPORT_BIT   (  0x0040, "Ticket Notch",     KEYCODE_K)  \
-    COREPORT_BIT   (  0x0080, "Dedicated Sw#20",  KEYCODE_L) \
-    COREPORT_BIT   (  0x0100, "Back",             KEYCODE_7) \
-    COREPORT_BIT   (  0x0200, "Minus",            KEYCODE_8) \
-    COREPORT_BIT   (  0x0400, "Plus",             KEYCODE_9) \
-    COREPORT_BIT   (  0x0800, "Select",           KEYCODE_0) \
-    COREPORT_BIT   (  0x8000, "Start Button",     KEYCODE_1) \
-    COREPORT_BIT   (  0x4000, "Tournament Start", KEYCODE_2) \
-    COREPORT_BITDEF(  0x0001, IPT_COIN1,          KEYCODE_3)  \
-    COREPORT_BITDEF(  0x0002, IPT_COIN2,          KEYCODE_4)  \
-    COREPORT_BITDEF(  0x0004, IPT_COIN3,          KEYCODE_5)  \
-    COREPORT_BITDEF(  0x0008, IPT_COIN4,          KEYCODE_6)  \
+    COREPORT_BIT   (  0x0001, "Start Button",     KEYCODE_1) \
+    COREPORT_BIT   (  0x0002, "Tournament Start", KEYCODE_2) \
+    COREPORT_BITDEF(  0x0004, IPT_COIN1,          KEYCODE_3)  \
+    COREPORT_BITDEF(  0x0008, IPT_COIN2,          KEYCODE_4)  \
+    COREPORT_BITDEF(  0x0010, IPT_COIN3,          KEYCODE_5)  \
+    COREPORT_BITDEF(  0x0020, IPT_COIN4,          KEYCODE_6)  \
+    COREPORT_BIT   (  0x0040, "Lockdown Button",  KEYCODE_L) \
+    COREPORT_BITDEF(  0x0080, IPT_TILT,           KEYCODE_INSERT)  \
+    COREPORT_BIT   (  0x0100, "Slam Tilt",        KEYCODE_HOME)  \
+    COREPORT_BIT   (  0x0200, "Ticket Notch",     KEYCODE_K)  \
+    COREPORT_BIT   (  0x0400, "Service Back",     KEYCODE_7) \
+    COREPORT_BIT   (  0x0800, "Service Minus",    KEYCODE_8) \
+    COREPORT_BIT   (  0x2000, "Service Plus",     KEYCODE_9) \
+    COREPORT_BIT   (  0x4000, "Service Select",   KEYCODE_0) \
     COREPORT_BITTOG(  0x1000, "Coin Door",        KEYCODE_END) \
   PORT_START /* 1 */ \
     COREPORT_DIPNAME( 0x001f, 0x0000, "Country") \
@@ -303,16 +311,40 @@ static MACHINE_STOP(spa) {
 /*-----------------
 /  Switches
 /------------------*/
+/*-- Cabinet switch numbers, from the manual's switch reference (§3.2). --*/
+#define SPA_SW_LOCKDOWN    76
+#define SPA_SW_START       78
+#define SPA_SW_TOURNAMENT  79
+#define SPA_SW_COIN_LEFT   81
+#define SPA_SW_COIN_RIGHT  82
+#define SPA_SW_COIN_CENTER 83
+#define SPA_SW_COIN_FOURTH 84
+#define SPA_SW_TILT        86   /* tilt pendulum */
+#define SPA_SW_TICKET      88   /* ticket notch */
+#define SPA_SW_SLAM        89   /* slam tilt */
+
 static SWITCH_UPDATE(spa) {
   if (inports) {
-    /*-- Col 9: coin slots --*/
-    CORE_SETKEYSW(inports[SPA_COMINPORT], 0x0f, 9);
-    /*-- Col 0: tilt, slam, coin door buttons --*/
-    CORE_SETKEYSW(inports[SPA_COMINPORT] >> 4, 0xff, 0);
-    /*-- Col 2: start --*/
-    CORE_SETKEYSW(inports[SPA_COMINPORT] >> 8, 0xc0, 2);
-    /*-- the coin door is not part of the switch matrix --*/
-    spalocals.coindoor = (inports[SPA_COMINPORT] & 0x1000) ? 0 : 1;
+    const int p = inports[SPA_COMINPORT];
+    core_setSw(SPA_SW_START,       p & 0x0001);
+    core_setSw(SPA_SW_TOURNAMENT,  p & 0x0002);
+    core_setSw(SPA_SW_COIN_LEFT,   p & 0x0004);
+    core_setSw(SPA_SW_COIN_CENTER, p & 0x0008);
+    core_setSw(SPA_SW_COIN_RIGHT,  p & 0x0010);
+    core_setSw(SPA_SW_COIN_FOURTH, p & 0x0020);
+    core_setSw(SPA_SW_LOCKDOWN,    p & 0x0040);
+    core_setSw(SPA_SW_TILT,        p & 0x0080);
+    core_setSw(SPA_SW_SLAM,        p & 0x0100);
+    core_setSw(SPA_SW_TICKET,      p & 0x0200);
+    /*-- The coin-door diagnostic buttons are wired straight to the CPU node
+        rather than into the matrix, so they are carried to the vblank and
+        pushed through the dedicated-switch entry point instead. --*/
+    spalocals.service = ((p & 0x4000) ? 1 : 0)        /* select */
+                      | ((p & 0x2000) ? 2 : 0)        /* plus   */
+                      | ((p & 0x0800) ? 4 : 0)        /* minus  */
+                      | ((p & 0x0400) ? 8 : 0);       /* back   */
+    /*-- the coin door interlock is not part of the switch matrix --*/
+    spalocals.coindoor = (p & 0x1000) ? 0 : 1;
   }
 }
 
@@ -389,11 +421,18 @@ static void spa_vblank(int data) {
 
   core_updateSw(1);
 
-  /*-- switches in --*/
+  /*-- switches in.
+      The manual (§4.1) puts the coin-door buttons on the CPU node at
+      0-SW-9..12 in the order select, plus, minus, back. The fork drove 8..11
+      in the opposite order, which would misread every menu keypress; these are
+      the manual's numbers. The DIPs sit at 0-SW-0 and 0-SW-2..8 -- an index is
+      skipped -- but nothing here depends on them, since free play and volume
+      are set through the core's own entry points. --*/
   if (spa.set_dedicated_switch_state) {
-    int sw = coreGlobals.swMatrix[0];
-    for (i = 8; i < 12; i++)
-      spa.set_dedicated_switch_state(i, 0, (sw & (1 << (i - 4))) ? 1 : 0);
+    spa.set_dedicated_switch_state(9,  0, (spalocals.service & 1) ? 1 : 0);
+    spa.set_dedicated_switch_state(10, 0, (spalocals.service & 2) ? 1 : 0);
+    spa.set_dedicated_switch_state(11, 0, (spalocals.service & 4) ? 1 : 0);
+    spa.set_dedicated_switch_state(12, 0, (spalocals.service & 8) ? 1 : 0);
     for (i = 0; i < 8; i++)
       spa.set_dedicated_switch_state(i, 0, core_getDip(0) & (1 << i));
   }
