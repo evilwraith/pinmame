@@ -348,7 +348,8 @@ static void spa_vblank(int data) {
       The result is exactly the pre-integrated 4-bit frame SAM submits. --*/
   for (i = 0; i < SPA_DMD_SIZE; i++) {
     UINT8 dot = spalocals.fbuffer[i];
-    frame[i] = (dot > 15 && spalocals.bbuffer) ? spalocals.bbuffer[i] : dot;
+    if (dot > 15 && spalocals.bbuffer) dot = spalocals.bbuffer[i];
+    frame[i] = dot & 0x0f;   /* the decoder expects 4 bits, nothing wider */
   }
   core_dmd_submit_frame(core_gameData->lcdLayout, frame, 1);
 
