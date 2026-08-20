@@ -31,6 +31,7 @@
 
 #define SPA_SOUNDFREQ    48000
 #define SPA_SNDBUFSIZE   (SPA_SOUNDFREQ * 70 / 1000)
+#define SPA_SND_MAXFRAMES 400                      /* interleaved frames per core call */
 #define SPA_STEPRATE     120                       /* core steps per second */
 #define SPA_DMD_W        128
 #define SPA_DMD_H        32
@@ -445,15 +446,24 @@ static void spa_vblank(int data) {
   else               spa.step();
 
   /*-- Audio out. Stays on the fast path: the mixer drains this ring
-      continuously, and topping it up only every other step would underrun. --*/
+      continuously, and topping it up only every other step would underrun.
+
+      The core hands back interleaved stereo, not mono. It reports the count in
+      samples, so a call carries count/2 frames -- 400 of them, which at 120
+      steps a second is exactly the 48 kHz this stream runs at. Reading them as
+      800 mono frames (as the Windows driver did) pushes twice as many frames
+      as the mixer consumes, so the ring sits permanently full, the core's
+      sound engine only gets clocked half as often as it should, and the result
+      is audible popping. --*/
   if (spa.get_sound_buffer) {
-    while (spa_sndbufferlength() < SPA_SNDBUFSIZE - 800) {
-      int count = 0;
+    while (spa_sndbufferlength() < SPA_SNDBUFSIZE - SPA_SND_MAXFRAMES) {
+      int count = 0, frames;
       INT16 *audio = spa.get_sound_buffer(&count);
-      if (!audio || count <= 0) break;
-      for (i = 0; i < count; i++) {
-        spalocals.samplebuf[0][spalocals.sampnum] = audio[i];
-        spalocals.samplebuf[1][spalocals.sampnum] = audio[i];
+      frames = count / 2;
+      if (!audio || frames <= 0) break;
+      for (i = 0; i < frames; i++) {
+        spalocals.samplebuf[0][spalocals.sampnum] = audio[2 * i];
+        spalocals.samplebuf[1][spalocals.sampnum] = audio[2 * i + 1];
         if (++spalocals.sampnum == SPA_SNDBUFSIZE) spalocals.sampnum = 0;
       }
     }
