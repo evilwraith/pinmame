@@ -512,6 +512,16 @@ static MACHINE_DRIVER_START(spa)
   MDRV_SOUND_ATTRIBUTES(SOUND_SUPPORTS_STEREO)
 MACHINE_DRIVER_END
 
+/*-- Declare the games as GEN_SPA, not GEN_SAM. PinMAME already carries that
+    generation for Stern Pinball Arcade ("can be removed again as soon as SPIKE
+    is emulated"), and it is treated as SAM everywhere that matters -- 16-shade
+    DMD, the extended solenoid range -- except in core_updateSw, which picks the
+    matrix column its flipper and EOS emulation reads and writes. Under GEN_SAM
+    that column is 11, which on this game is switches 81-88: the coin slots,
+    tilt pendulum and ticket notch. So every vblank PinMAME was overwriting real
+    switches with flipper state, and the emulated EOS bit was landing on a coin
+    switch two vblanks after each flip. GEN_SPA moves it to column 15, which is
+    past the highest switch this game has. --*/
 #define INITSPAGAME(name, gen, disp, lampcol, corelib) \
   static core_tGameData name##GameData = { \
     gen, disp, {FLIP_SW(FLIP_L) | FLIP_SOL(FLIP_L), 0, lampcol, 14, 0, 0, 0, 0, spa_getSol}}; \
@@ -533,7 +543,7 @@ static struct core_dispLayout spa_dmd128x32[] = {
 /*-------------------------------------------------------------------
 / Ghostbusters LE
 /--------------------------------------------------------------------*/
-INITSPAGAME(spagb, GEN_SAM, spa_dmd128x32, 8, "libSternGB.so")
+INITSPAGAME(spagb, GEN_SPA, spa_dmd128x32, 8, "libSternGB.so")
 SPA_ROM(spagb_100)
 SPA_INPUT_PORTS_START(spagb, 1)
 CORE_GAMEDEF(spagb, 100, "Ghostbusters LE (Stern Pinball Arcade)", 2016, "Stern", spa, 0)
