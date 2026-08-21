@@ -502,3 +502,29 @@ PINMAMEAPI void PinmameSetMsgAPI(MsgPluginAPI* msgPluginAPI, unsigned int endpoi
 
 // Provide a 'Pinball Memory Maps' (see https://github.com/tomlogic/pinmame-nvram-maps) to expose additional internal game states
 PINMAMEAPI void PinmameSetMemMap(uint8_t* platform, size_t platformSize, uint8_t* game, size_t gameSize);
+
+// Direct access to the states parsed by PinmameSetMemMap, for hosts that link
+// libPinMAME in-process and have no MsgPluginAPI to receive the state source over.
+// Values are the same ones the Controller plugin's state source exposes.
+
+#define PINMAME_MEMMAP_TYPE_INT64  0x0080 // mirrors CTLPI_STATE_TYPE_INT64
+#define PINMAME_MEMMAP_TYPE_STRING 0x0400 // mirrors CTLPI_STATE_TYPE_STRING
+
+typedef struct {
+   const char* group;  // backslash-separated path through the map, e.g. "game_state\\scores\\Player 1"
+   const char* name;   // leaf label, e.g. "Player 1"
+   int typeMask;       // which PINMAME_MEMMAP_TYPE_* reads this state answers
+} PinmameMemMapStateInfo;
+
+// Number of states the current map defines. 0 until PinmameSetMemMap is called.
+PINMAMEAPI int PinmameGetMemMapStateCount();
+
+// Describe one state. The returned pointers belong to libPinMAME and stay valid
+// until the next PinmameSetMemMap call. Returns 0 on success, -1 on a bad index.
+PINMAMEAPI int PinmameGetMemMapStateInfo(const unsigned int index, PinmameMemMapStateInfo* const p_info);
+
+// Read one state. Both require a running ROM, since they resolve live CPU memory.
+// Return 0 on success, -1 if the index is out of range, the state does not answer
+// that type, or no ROM is running.
+PINMAMEAPI int PinmameGetMemMapStateInt(const unsigned int index, int64_t* const p_value);
+PINMAMEAPI int PinmameGetMemMapStateString(const unsigned int index, char* const p_buffer, const int bufferSize);
