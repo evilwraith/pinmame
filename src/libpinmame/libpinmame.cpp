@@ -2915,36 +2915,50 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
                      return -1;
                   if (isBCD)
                   {
-                     if (isLittleEndian)
-                     {
-                        for (auto it = offsets.rbegin(); it != offsets.rend(); ++it)
+                     // A nibble outside 0..9 is not a digit. Scoring it as 0 makes blanked memory
+                     // read as a confident zero, which a caller cannot tell apart from a real zero
+                     // score: centaur keeps its scores in display memory that reads 0xFF while
+                     // blanked, so a poll landing there reported 0 and flattened a live game total.
+                     //
+                     // A field holding no valid digit at all is therefore reported as unreadable.
+                     // The arithmetic below is unchanged, so any field with even one real digit
+                     // decodes exactly as it did before and this cannot reject a value it used to
+                     // return.
+                     bool sawDigit = false;
+                     const auto addByte = [&](uint8_t num)
                         {
-                           const uint8_t num = (*(ptr + *it - baseOffset)) & byteMask;
                            const uint8_t dig1 = (num & 0x0F);
                            const uint8_t dig2 = (num >> 4);
                            if (nibble == 0)
+                           {
                               v = (v * 100) + (dig2 > 9 ? 0 : dig2 * 10) + (dig1 > 9 ? 0 : dig1);
+                              sawDigit = sawDigit || dig1 <= 9 || dig2 <= 9;
+                           }
                            else if (nibble == 1)
+                           {
                               v = (v * 10) + (dig1 > 9 ? 0 : dig1);
+                              sawDigit = sawDigit || dig1 <= 9;
+                           }
                            else if (nibble == 2)
+                           {
                               v = (v * 10) + (dig2 > 9 ? 0 : dig2);
-                        }
+                              sawDigit = sawDigit || dig2 <= 9;
+                           }
+                        };
+
+                     if (isLittleEndian)
+                     {
+                        for (auto it = offsets.rbegin(); it != offsets.rend(); ++it)
+                           addByte((*(ptr + *it - baseOffset)) & byteMask);
                      }
                      else
                      {
                         for (auto offset : offsets)
-                        {
-                           const uint8_t num = (*(ptr + offset - baseOffset)) & byteMask;
-                           const uint8_t dig1 = (num & 0x0F);
-                           const uint8_t dig2 = (num >> 4);
-                           if (nibble == 0)
-                              v = (v * 100) + (dig2 > 9 ? 0 : dig2 * 10) + (dig1 > 9 ? 0 : dig1);
-                           else if (nibble == 1)
-                              v = (v * 10) + (dig1 > 9 ? 0 : dig1);
-                           else if (nibble == 2)
-                              v = (v * 10) + (dig2 > 9 ? 0 : dig2);
-                        }
+                           addByte((*(ptr + offset - baseOffset)) & byteMask);
                      }
+
+                     if (!sawDigit)
+                        return -1;
                   }
                   else
                   {
