@@ -2883,7 +2883,7 @@ PINMAMEAPI void PinmameSetMemMap(uint8_t* platform, size_t platformSize, uint8_t
                            else if (nibble == 1)
                               v = (v * 10) + (dig1 > 9 ? 0 : dig1);
                            else if (nibble == 2)
-                              v = (v * 10) + (dig2 > 9 ? 0 : dig1);
+                              v = (v * 10) + (dig2 > 9 ? 0 : dig2);
                         }
                      }
                      else
@@ -2898,7 +2898,7 @@ PINMAMEAPI void PinmameSetMemMap(uint8_t* platform, size_t platformSize, uint8_t
                            else if (nibble == 1)
                               v = (v * 10) + (dig1 > 9 ? 0 : dig1);
                            else if (nibble == 2)
-                              v = (v * 10) + (dig2 > 9 ? 0 : dig1);
+                              v = (v * 10) + (dig2 > 9 ? 0 : dig2);
                         }
                      }
                   }
