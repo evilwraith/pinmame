@@ -7,7 +7,6 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
-#include <format>
 #include <atomic>
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -1783,7 +1782,7 @@ static void OnGetControllers(const unsigned int eventId, void* userData, void* m
       static std::string gameId;
       // Broadcast the game name that was requested (which may be an alias registered through alias.txt)
       // so consumers see the same id the table script used, not the resolved driver name
-      gameId = std::format("pinmame::{}", g_szGameName[0] ? g_szGameName : Machine->gamedrv->name);
+      gameId = std::string("pinmame::") + (g_szGameName[0] ? g_szGameName : Machine->gamedrv->name);
       msg->entries[msg->count].ctrlEndpointId = msgLocals.endpointId;
       msg->entries[msg->count].gameId = gameId.c_str();
    }
