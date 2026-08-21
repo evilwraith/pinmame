@@ -3329,3 +3329,95 @@ PINMAMEAPI void PinmameSetMemMap(uint8_t* platform, size_t platformSize, uint8_t
 		libpinmame_log_error("PinmameSetMemMap(): failed to parse memory map: %s", e.what());
 	}
 }
+
+/******************************************************
+ * Memory map state direct access
+ *
+ * PinmameSetMemMap publishes its states through the Controller plugin's state
+ * source, which needs a MsgPluginAPI host to reach. This fork links libpinmame
+ * in-process and has no plugin host, so these four entry points read the same
+ * msgLocals.memMapStates vector directly. They are a view onto the parsed map,
+ * not a second parser -- PinmameSetMemMap remains the only thing that builds it.
+ ******************************************************/
+
+static_assert(PINMAME_MEMMAP_TYPE_INT64 == CTLPI_STATE_FORMAT_INT64,
+	"PINMAME_MEMMAP_TYPE_INT64 must track CTLPI_STATE_FORMAT_INT64");
+static_assert(PINMAME_MEMMAP_TYPE_STRING == CTLPI_STATE_FORMAT_STRING,
+	"PINMAME_MEMMAP_TYPE_STRING must track CTLPI_STATE_FORMAT_STRING");
+
+/******************************************************
+ * PinmameGetMemMapStateCount
+ ******************************************************/
+
+PINMAMEAPI int PinmameGetMemMapStateCount()
+{
+	return (int)msgLocals.memMapStates.size();
+}
+
+/******************************************************
+ * PinmameGetMemMapStateInfo
+ ******************************************************/
+
+PINMAMEAPI int PinmameGetMemMapStateInfo(const unsigned int index, PinmameMemMapStateInfo* const p_info)
+{
+	if (p_info == nullptr || index >= msgLocals.memMapStates.size())
+		return -1;
+
+	// Both strings live in the MemMapState entry, so they stay valid until the
+	// next PinmameSetMemMap call clears the vector.
+	const auto& state = msgLocals.memMapStates[index];
+	p_info->group = state.group.c_str();
+	p_info->name = state.name.c_str();
+	p_info->typeMask = (int)state.type;
+	return 0;
+}
+
+/******************************************************
+ * PinmameGetMemMapStateInt
+ ******************************************************/
+
+PINMAMEAPI int PinmameGetMemMapStateInt(const unsigned int index, int64_t* const p_value)
+{
+	if (p_value == nullptr || index >= msgLocals.memMapStates.size())
+		return -1;
+
+	// The getters dereference memory_find_base(), which only means anything
+	// while a ROM is actually executing.
+	if (_isRunning != 1)
+		return -1;
+
+	const auto& state = msgLocals.memMapStates[index];
+	if (state.type != PINMAME_MEMMAP_TYPE_INT64)
+		return -1;
+
+	return state.getState(index, p_value) ? 0 : -1;
+}
+
+/******************************************************
+ * PinmameGetMemMapStateString
+ ******************************************************/
+
+PINMAMEAPI int PinmameGetMemMapStateString(const unsigned int index, char* const p_buffer, const int bufferSize)
+{
+	if (p_buffer == nullptr || bufferSize < 1 || index >= msgLocals.memMapStates.size())
+		return -1;
+
+	p_buffer[0] = '\0';
+
+	if (_isRunning != 1)
+		return -1;
+
+	const auto& state = msgLocals.memMapStates[index];
+	if (state.type != PINMAME_MEMMAP_TYPE_STRING)
+		return -1;
+
+	// The string getter hands back a pointer into one shared scratch buffer that
+	// the next string read overwrites, so copy it out before returning.
+	const char* p_str = nullptr;
+	if (!state.getState(index, &p_str) || p_str == nullptr)
+		return -1;
+
+	strncpy(p_buffer, p_str, (size_t)bufferSize - 1);
+	p_buffer[bufferSize - 1] = '\0';
+	return 0;
+}
