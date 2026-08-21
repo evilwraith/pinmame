@@ -853,7 +853,7 @@ extern "C" void OnSolenoid(const int solenoid, const int state)
 
 extern "C" void libpinmame_log_info(const char* format, ...)
 {
-	if (!_p_Config->cb_OnLogMessage)
+	if (!_p_Config || !_p_Config->cb_OnLogMessage)
 		return;
 
 	va_list args;
@@ -868,7 +868,7 @@ extern "C" void libpinmame_log_info(const char* format, ...)
 
 extern "C" void libpinmame_log_error(const char* format, ...)
 {
-	if (!_p_Config->cb_OnLogMessage)
+	if (!_p_Config || !_p_Config->cb_OnLogMessage)
 		return;
 
 	va_list args;
@@ -2656,7 +2656,7 @@ PINMAMEAPI void PinmameSetMsgAPI(MsgPluginAPI* msgApi, unsigned int endpointId)
       SetupMsgApi();
 }
 
-PINMAMEAPI void PinmameSetMemMap(uint8_t* platform, size_t platformSize, uint8_t* game, size_t gameSize)
+static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game, size_t gameSize)
 {
    const auto parseAddress = [](const json& node, unsigned int& value) -> bool
       {
@@ -3009,6 +3009,25 @@ PINMAMEAPI void PinmameSetMemMap(uint8_t* platform, size_t platformSize, uint8_t
          return s < 0;
       return false;
       });
+}
+
+/******************************************************
+ * PinmameSetMemMap
+ ******************************************************/
+
+PINMAMEAPI void PinmameSetMemMap(uint8_t* platform, size_t platformSize, uint8_t* game, size_t gameSize)
+{
+	// Map files come from disk, and on this fork the directory is user-overridable,
+	// so a truncated or hand-edited file is reachable input rather than a build bug.
+	// nlohmann::json signals that by throwing, which would cross this C boundary and
+	// terminate the host, so failure is contained here and reported as "no states".
+	try {
+		SetMemMapImpl(platform, platformSize, game, gameSize);
+	}
+	catch (const std::exception& e) {
+		msgLocals.memMapStates.clear();
+		libpinmame_log_error("PinmameSetMemMap(): failed to parse memory map: %s", e.what());
+	}
 }
 
 /******************************************************
