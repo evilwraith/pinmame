@@ -1642,6 +1642,54 @@ PINMAMEAPI int PinmameGetNVRAM(PinmameNVRAMState* const p_nvramStates)
 }
 
 /******************************************************
+ * PinmameSetNVRAM
+ ******************************************************/
+
+PINMAMEAPI int PinmameSetNVRAM(const PinmameNVRAMState* const p_nvramStates, const int count)
+{
+	if (!_isRunning)
+		return -1;
+
+	if (!(Machine && Machine->drv && Machine->drv->nvram_handler))
+		return -1;
+
+	if (count < 0 || (count > 0 && !p_nvramStates))
+		return -1;
+
+	// Round-trip through the machine's own nvram handler: serialize the live
+	// image, patch the requested bytes, then feed the image back through the
+	// handler's load path, which restores it into live machine memory (and
+	// re-applies the untouched mech/dip tail it serialized itself).
+	mame_file* nvram_file = (mame_file*)malloc(sizeof(mame_file));
+	memset(nvram_file, 0, sizeof(mame_file));
+	nvram_file->type = RAM_FILE;
+	(*Machine->drv->nvram_handler)(nvram_file, 1);
+
+	if (nvram_file->offset == 0) {
+		mame_fclose(nvram_file);
+		return -1;
+	}
+
+	const int size = (int)nvram_file->offset;
+	int applied = 0;
+	for (int i = 0; i < count; ++i) {
+		const int no = p_nvramStates[i].nvramNo;
+		if (no < 0 || no >= size)
+			continue;
+		nvram_file->data[no] = p_nvramStates[i].currStat;
+		applied++;
+	}
+
+	nvram_file->offset = 0;
+	nvram_file->eof = 0;
+	(*Machine->drv->nvram_handler)(nvram_file, 0);
+
+	mame_fclose(nvram_file);
+
+	return applied;
+}
+
+/******************************************************
  * PinmameGetSoundMode
  ******************************************************/
 
