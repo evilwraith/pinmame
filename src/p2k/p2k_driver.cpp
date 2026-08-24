@@ -23,7 +23,7 @@ static_assert(int(p2k_state::NVRAM_RTC)    == P2K_NV_BLOCK_RTC,    "NVRAM block 
 //
 // Keep 1. Mode 2 was tried and is worse: Revenge From Mars does not boot under it at all, in any
 // version, while Episode I gets no further than it does under 1. p2k_state::set_prism_roms has the
-// detail, including what mode 2 was for and why it is still worth having around.
+// detail, including what mode 2 was for and why it is still worth having around
 #ifndef P2K_PATCH_PCI_INIT_RETRY
 #define P2K_PATCH_PCI_INIT_RETRY 1
 #endif
@@ -34,8 +34,7 @@ static_assert(int(p2k_state::NVRAM_RTC)    == P2K_NV_BLOCK_RTC,    "NVRAM block 
 //
 // Arrived at with P2K_PDBWATCH rather than from the buffer's part number. The test walks one row bit at a time - 0x01, 0x02, 0x04 ... 0x80 - and
 // reads 0x10 and 0x11 after each. Both readings that produced "short" left the bit being driven
-// CLEAR: the constant 0x00 this used to return, and an inverted echo (0xfe, 0xfd, 0xfb ...).
-// Echoing un-inverted is what sets it
+// CLEAR: the constant 0x00 this used to return, and an inverted echo (0xfe, 0xfd, 0xfb ...). Echoing un-inverted is what sets it
 #ifndef P2K_LAMP_STATUS_INVERT
 #define P2K_LAMP_STATUS_INVERT 0
 #endif
@@ -128,7 +127,7 @@ extern "C" void p2k_dcs_write(u32 offset, u32 data, u32 mem_mask) P2K_WEAK;
 
 // One MediaGX/Prism ROM bank: two 8 MB chips interleaved as 32-bit words
 static constexpr size_t   PRISM_BANK_BYTES = 0x1000000;
-static constexpr size_t   PRISM_BANK_WORDS = PRISM_BANK_BYTES / 4;   // 0x400000
+static constexpr size_t   PRISM_BANK_WORDS = PRISM_BANK_BYTES / 4; // 0x400000
 static constexpr unsigned PRISM_BANK_SHIFT = 22;
 static constexpr size_t   PRISM_BANK_MASK  = PRISM_BANK_WORDS - 1;
 // Both of these are what lets the wrap be an AND. If the bank size ever stops being a power of
@@ -160,12 +159,12 @@ p2k_state *p2k_current_state() { return g_state; }
 
 p2k_state::p2k_state()
 {
-	m_main_ram.assign(0x10000000, 0);      // 256 MB, as mapped by the driver
+	m_main_ram.assign(0x10000000, 0);            // 256 MB, as mapped by the driver
 	m_video_ram_a.assign(0x10000, 0);
 	m_cga_ram.assign(0x10000, 0);
 	m_ram_c8.assign(0x8000, 0);
 	m_bios_ram.assign(0x30000, 0);
-	m_nvram.assign(P2K_NV_CMOS_SIZE, 0);   // sized from the shared header, not a literal
+	m_nvram.assign(P2K_NV_CMOS_SIZE, 0);         // sized from the shared header, not a literal
 	// 0xff because erased flash reads all-ones. A set carrying an update region overwrites every
 	// byte and never sees this; one with no update flash boots against it, and then it could matter
 	m_nvram_updates.assign(0x800000, 0xff);
@@ -174,9 +173,9 @@ p2k_state::p2k_state()
 	m_smm.assign(0x80000, 0);
 	m_vram.assign(0x400000, 0);
 	m_system_bios1.assign(0x30000 / 4, 0);
-	m_eeprom.assign(P2K_NV_EEPROM_SIZE / 4, 0); // u32 elements, so the byte size is /4 here
+	m_eeprom.assign(P2K_NV_EEPROM_SIZE / 4, 0);  // u32 elements, so the byte size is /4 here
 #if P2K_SEED_ERROR_LOG
-	seed_error_log();                      // before MACHINE_INIT copies a saved CMOS over it
+	seed_error_log();                            // before MACHINE_INIT copies a saved CMOS over it
 #endif
 	g_state = this;
 }
@@ -210,16 +209,16 @@ p2k_state::p2k_state()
 // and the geometry are set; the four in-use/index words stay 0, which is an empty log
 void p2k_state::seed_error_log()
 {
-	constexpr u32 region  = 0x23b0;                       // the size the routine works from
-	constexpr u32 base_a  = 0x11000050;                   // the records start right after the header
-	const u32 a_count     = (region * 3) >> 12;           // 6
-	const u32 a_recsize   = ((region * 3) >> 2) / a_count;// 0x476
-	const u32 b_count     = region >> 10;                 // 8
-	const u32 b_recsize   = (region >> 2) / b_count;      // 0x11d
-	const u32 base_b      = base_a + a_recsize * a_count; // 0x11001b14
+	constexpr u32 region = 0x23b0;                       // the size the routine works from
+	constexpr u32 base_a = 0x11000050;                   // the records start right after the header
+	const u32 a_count    = (region * 3) >> 12;           // 6
+	const u32 a_recsize  = ((region * 3) >> 2) / a_count;// 0x476
+	const u32 b_count    = region >> 10;                 // 8
+	const u32 b_recsize  = (region >> 2) / b_count;      // 0x11d
+	const u32 base_b     = base_a + a_recsize * a_count; // 0x11001b14
 
 	if (m_nvram.size() < 0x50) return;
-	write_le(m_nvram, 0x00, 0x2400,    0xffffffff);       // total size the two rings must fit in
+	write_le(m_nvram, 0x00, 0x2400,    0xffffffff);      // total size the two rings must fit in
 	write_le(m_nvram, 0x08, a_count,   0xffffffff);
 	write_le(m_nvram, 0x0c, a_recsize, 0xffffffff);
 	write_le(m_nvram, 0x14, base_a,    0xffffffff);
@@ -242,9 +241,10 @@ void p2k_state::seed_error_log()
 // Which is why handing it the host year on every start makes the displayed year climb: a fresh
 // machine has 1999 stored and adds 27 to reach 2026, and every start after that adds 27 again -
 // 2053, 2080. Refreshing everything *except* register 9 gives the guest what a ticking
-// battery-backed clock would: the current date and time, and no years to add. The one thing this
-// does not model is a New Year passing while the machine is off, which would want that register
-// set to the number of years crossed
+// battery-backed clock would: the current date and time, and no years to add. A New Year passing
+// while the machine is off does want that register set to the number of years crossed, and
+// rtc_restore() below is what puts it there, off the saved stamp.
+//
 // The clock as PinMAME saves it: the 64 registers, then the host time_t they were taken at. The
 // stamp is the whole point - the emulated chip stops when the machine does, where the real one
 // keeps running on its battery, so the only way to know how long it was off is to ask the host
@@ -265,17 +265,25 @@ void p2k_state::rtc_restore()
 
 	u64 saved = 0;
 	memcpy(&saved, m_rtc_nv + 0x40, sizeof saved);
-	if (!saved) return;                        // saved by a build that did not stamp it
 
 	// Calendar years crossed, not elapsed years: a machine switched off on 31 December and started
-	// the next morning slept through one New Year, and that is the one the firmware needs to add
+	// the next morning slept through one New Year, and that is the one the firmware needs to add.
+	// Skipped for a block saved by a build that did not stamp it, and for a host clock that has
+	// moved backwards since - neither has any number of years to offer
 	const time_t then_t = time_t(saved), now_t = ::time(nullptr);
-	if (now_t <= then_t) return;               // clock moved backwards; nothing to add
-	struct tm a = *localtime(&then_t), b = *localtime(&now_t);
-	int years = b.tm_year - a.tm_year;
-	if (years < 0) years = 0;
-	if (years > 99) years = 99;                // a register, not a span to be trusted blindly
-	m_rtc->p2k_data()[9] = u8(m_rtc_nv[9] + years);
+	if (saved && now_t > then_t)
+	{
+		struct tm a = *localtime(&then_t), b = *localtime(&now_t);
+		int years = b.tm_year - a.tm_year;
+		if (years <  0) years = 0;
+		if (years > 99) years = 99; // a register, not a span to be trusted blindly
+		m_rtc->p2k_data()[9] = u8(m_rtc_nv[9] + years);
+	}
+
+	// The register file went in behind the device's back, so the timers and the interrupt line are
+	// still set up for whatever it last saw written rather than for the divider and enables just
+	// restored. The device does this much for itself when it loads the same bytes in nvram_read()
+	m_rtc->p2k_reload();
 }
 void p2k_state::clock_from_host(bool keep_year)
 {
@@ -283,6 +291,16 @@ void p2k_state::clock_from_host(bool keep_year)
 	const uint8_t year = m_rtc->p2k_data()[9];
 	m_rtc->p2k_nvram_default();
 	if (keep_year) m_rtc->p2k_data()[9] = year;
+
+	// Register A is the divider and nvram_default() zeroes it with the rest, leaving DV2:DV0 = 000 -
+	// the divider chain stopped on a real chip, and in this model a seconds update every 128 seconds,
+	// so the clock starts right and then stands still. The firmware never writes this register: on
+	// the real board it is battery-backed and was set once, so zeroed is a state no machine is in.
+	// Seed what a live chip holds - DV 010, the 32.768 kHz base, and RS 0110, the usual PC periodic
+	// rate, which only raises PF unless the guest sets PIE - through the port, that being what
+	// re-arms the timers; poking p2k_data() would not, update_timer() having already run
+	m_rtc->write(0, 0x0a);
+	m_rtc->write(1, 0x26);
 }
 
 p2k_state::~p2k_state()
@@ -559,8 +577,11 @@ void p2k_state::build_machine(u32 cpu_clock)
 	// slowdown to go with the 20 MHz CPU. The firmware programs channel 0 as a rate generator
 	// with divisor 298, so that was a tick every ~6400 CPU cycles.
 	//
-	// This is also the machine's clock: the RTC is only read at boot, and from then on one_second_proc
-	// counts these ticks and bumps the date and time it keeps in the CMOS. 1193182/298 is 4004 Hz and
+	// This is also the machine's time base: one_second_proc counts these ticks and bumps the date and
+	// time the firmware keeps in its own CMOS. Not the whole of its clock though - it tracks the RTC
+	// while running too, which is how a stopped divider in that chip showed up as a displayed clock
+	// that never advanced (see PAST_FAILURES.md). What follows is about this tick and holds either
+	// way, however the two divide the work. 1193182/298 is 4004 Hz and
 	// the count it makes a second out of is round, so its second comes up about 0.13% short - measured
 	// at 77563110 cycles against the 77666666 a second really takes, a gain of roughly two minutes a
 	// day. A real board has the same crystal and the same divisor, so it drifts the same way; do not
@@ -1392,8 +1413,7 @@ void p2k_state::gx_pipeline_w(offs_t offset, u32 data, u32 mem_mask)
 			fflush(stderr);
 		}
 	}
-#endif
-#if P2K_DEBUG
+
 	g_blt_status_run = 0; // something happened, so any status poll was not a spin
 #endif
 }
@@ -1548,9 +1568,7 @@ void p2k_state::do_gfx_pipeline()
 			fflush(stderr);
 		}
 	}
-#endif
 
-#if P2K_DEBUG
 	// The assumption above, checked: a row that is not uniform means the hardware is being asked
 	// for per-column destination data, which one key cannot express, and the copy below would draw
 	// the wrong thing with no other sign of it. 320 compares against a copy of 640 pixels, never detected so far
@@ -1810,9 +1828,8 @@ void p2k_state::disp_ctrl_w(offs_t offset, u32 data, u32 mem_mask)
 	const u32 before = r;
 	r = (r & ~mem_mask) | (data & mem_mask);
 
-	// P2K_DISPWATCH=1: every write that changes a display controller register, with the PC that
-	// made it. Which registers a game programs, and when, is the difference between a picture and
-	// a black screen.
+	// P2K_DISPWATCH=1: every write that changes a display controller register, with the PC that made it.
+	// Which registers a game programs, and when, is the difference between a picture and a black screen
 #if P2K_DEBUG
 	static const bool watch = getenv("P2K_DISPWATCH") != nullptr;
 	if (watch && r != before)
@@ -1896,7 +1913,7 @@ u8 p2k_state::nvram_updates_r(offs_t offset) const
 		return 0;
 	}
 	if (m_flash_mode == 2 || m_flash_mode == 5)
-		return 0x80;                                     // status: ready
+		return 0x80; // status: ready
 	return (offset < m_nvram_updates.size()) ? m_nvram_updates[offset] : 0xff;
 }
 
@@ -1904,9 +1921,9 @@ void p2k_state::nvram_updates_w(offs_t offset, u16 data)
 {
 	if (m_flash_mode != 6)
 	{
-		if (data == 0x0098)      { m_flash_mode = 1; return; }   // read query
-		if (data == 0x0070)      { m_flash_mode = 2; return; }   // read status register
-		if (data == 0x00ff)      { m_flash_mode = 0; return; }   // read array
+		if (data == 0x0098) { m_flash_mode = 1; return; } // read query
+		if (data == 0x0070) { m_flash_mode = 2; return; } // read status register
+		if (data == 0x00ff) { m_flash_mode = 0; return; } // read array
 		// Block erase. Three different block sizes meet here and none of them agree: the CFI table
 		// this same device answers with declares one region of 0x3f+1 blocks of 0x200*256 bytes,
 		// so 64 blocks of 128 KB across the 8 MB part; this check aligns on a *word* offset of
