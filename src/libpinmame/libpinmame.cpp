@@ -257,7 +257,8 @@ static struct
       std::string group;
       std::string name;
       unsigned int type;
-      std::function<void(unsigned int index, void* pResult)> getState;
+      // Returns false when the state cannot be read right now -- see the note in GetMemMapState.
+      std::function<bool(unsigned int index, void* pResult)> getState;
    };
    char memMapStringBuffer[256];
    std::vector<MemMapState> memMapStates;
@@ -2027,9 +2028,14 @@ static void SetDIPSwitchState(CtlResId blockId, unsigned int stateIndex, const v
 static void GetMemMapState(CtlResId blockId, unsigned int stateIndex, void* pResult)
 {
    std::lock_guard lock(msgLocals.stateProvider->GetListMutex());
-   if (_isRunning != 1) { GetDefaultValue(msgLocals.stateGroups[blockId.resId - PMPI_GROUP_SOLENOID].stateDef.stateDefs[stateIndex].dataFormat, pResult); return; }
+   const int dataFormat = msgLocals.stateGroups[blockId.resId - PMPI_GROUP_SOLENOID].stateDef.stateDefs[stateIndex].dataFormat;
+   if (_isRunning != 1) { GetDefaultValue(dataFormat, pResult); return; }
    const int srcId = msgLocals.stateGroups[blockId.resId - PMPI_GROUP_SOLENOID].stateMap[stateIndex].srcId;
-   msgLocals.memMapStates[srcId].getState(srcId, pResult);
+   // A getter that cannot read its state right now reports the format's default, the same answer
+   // this already gives when no game is running. Without a way to say so, a state that is
+   // momentarily unreadable is indistinguishable from one that genuinely reads zero.
+   if (!msgLocals.memMapStates[srcId].getState(srcId, pResult))
+      GetDefaultValue(dataFormat, pResult);
 }
 static void GetCoreMechState(CtlResId blockId, unsigned int stateIndex, void* pResult)
 {
@@ -3008,7 +3014,7 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
             return;
 
          unsigned int type = 0;
-         std::function<void(unsigned int index, void* pResult)> getter;
+         std::function<bool(unsigned int index, void* pResult)> getter;
          if (encoding == "int" || encoding == "bcd" || encoding == "bits" || encoding == "bool" || encoding == "enum")
          {
             const bool isBCD = encoding == "bcd";
@@ -3113,7 +3119,7 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
                   const unsigned int baseOffset = isLittleEndian ? offsets.back() : offsets.front();
                   const uint8_t* ptr = static_cast<const uint8_t*>(memory_find_base(0, baseOffset));
                   if (ptr == nullptr)
-                     return;
+                     return false;
                   if (isBCD)
                   {
                      if (isLittleEndian)
@@ -3199,7 +3205,7 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
                            *static_cast<const char**>(pResult) = "";
                         else
                            *static_cast<int64_t*>(pResult) = 0;
-                        return;
+                        return false;
                      }
                      const json& mapped = enumValues[(size_t)v];
                      if (enumIsString)
@@ -3207,12 +3213,13 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
                         const std::string text = mapped.is_string() ? mapped.get<std::string>() : mapped.dump();
                         snprintf(msgLocals.memMapStringBuffer, sizeof(msgLocals.memMapStringBuffer), "%s", text.c_str());
                         *static_cast<const char**>(pResult) = msgLocals.memMapStringBuffer;
-                        return;
+                        return true;
                      }
                      v = mapped.is_boolean() ? (mapped.get<bool>() ? 1 : 0) : mapped.get<int64_t>();
                   }
 
                   *static_cast<int64_t*>(pResult) = v;
+                  return true;
                };
          }
          else if (encoding == "ch")
@@ -3235,7 +3242,7 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
                   const unsigned int baseOffset = offsets[0];
                   const uint8_t* ptr = static_cast<const uint8_t*>(memory_find_base(0, baseOffset));
                   if (ptr == nullptr)
-                     return;
+                     return false;
 
                   assert(offsets.size() < sizeof(msgLocals.memMapStringBuffer));
                   char* pStr = msgLocals.memMapStringBuffer;
@@ -3264,6 +3271,7 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
                      *--pStr = 0;
 
                   *static_cast<const char**>(pResult) = msgLocals.memMapStringBuffer;
+                  return true;
                };
          }
          else
