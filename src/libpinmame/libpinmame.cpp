@@ -1757,6 +1757,11 @@ PINMAMEAPI int PinmameGetNVRAM(PinmameNVRAMState* const p_nvramStates)
 		p_nvramStates[i].oldStat = 0;
 	}
 
+	// The RAM file and the serialized NVRAM image it owns must be released on the success
+	// path too: every caller polling this (ScoreServer, the VPinMAME NVRAM property) otherwise
+	// leaks one full image per call (128 KB on SAM, ~20-30 MB/min at the polling rate).
+	mame_fclose(nvram_file);
+
 	return size;
 }
 
