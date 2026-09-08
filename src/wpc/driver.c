@@ -1391,6 +1391,8 @@ DRIVERNV(bikerac2)      // 1992 - Bike Race (2-ball play)
 DRIVERNV(bikerac3)      // 1992 - Bike Race (V4.1)
 DRIVERNV(sleicpin)      // 1993 - Sleic Pin-Ball
 DRIVERNV(iomoon)        // 1994 - Io Moon
+DRIVERNV(iomoona)       // 1994 - Io Moon (earlier ROM revision)
+DRIVERNV(iomoont)       // 1994 - Io Moon (PRESS START tournament MOD)
                         // 1996 - Dona Elvira 2
 
 // ----------------
@@ -3081,6 +3083,7 @@ DRIVER(sttng,d2)        //                  Star Trek: The Next Generation (DX-2
 DRIVER(sttng,l3)        //          12/93 W Star Trek: The Next Generation (LX-3)
 DRIVER(sttng,l5)        //          12/93 W Star Trek: The Next Generation (LX-5)
 DRIVER(sttng,l7)        //          02/94 W Star Trek: The Next Generation (LX-7 Sound L-1)
+DRIVER(sttng,la7)       //          02/94 W Star Trek: The Next Generation (LA-7 Sound L-1)
 DRIVER(sttng,d7)        //                  Star Trek: The Next Generation (DX-7 Sound L-1) LED Ghost Fix
 DRIVER(sttng,l7c)       //          08/17 W Star Trek: The Next Generation (LX-7C Competition MOD)
 DRIVER(sttng,x7)        //          02/94 W Star Trek: The Next Generation (LX-7 Special Sound L-1)

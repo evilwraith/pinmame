@@ -111,6 +111,7 @@ typedef struct {
 	UINT8	data_out;		//Data to send out
 	UINT8	bits_to_send;	//How many bits left to send when transmitting out the serial port
 	UINT8	bitcycles;		//# of bitcycles passed since last bit was sent
+	UINT8	baudcycles;		//# of Timer 1 overflows since the last bit, when Timer 1 is the baud generator
 } I8051_UART;
 
 typedef struct {
@@ -341,6 +342,8 @@ static READ32_HANDLER((*hold_eram_iaddr_callback));
 /***************************************************************
  * Easy macros for Getting Flags
  ***************************************************************/
+/*PCON Flags*/
+#define GET_SMOD		((R_PCON & 0x80)>>7)			//Doubles the serial baud rate when set
 /*PSW Flags*/
 #define GET_CY			((R_PSW & 0x80)>>7)
 #define GET_AC			((R_PSW & 0x40)>>6)
@@ -423,17 +426,36 @@ static READ32_HANDLER((*hold_eram_iaddr_callback));
 
 #define V_TF2	0x02b	/* Timer 2 Overflow */
 
-/* Any pending IRQ */
+#ifdef I8051_SWEEP
+/* Sweep instrumentation.  Defined next to check_interrupts(), where the counting
+   happens; declared here only so i8051_exit() below can print the totals. */
+static void sweep_irq_report(void);
+#endif
+
+/* Any pending IRQ.
+   MCS-51 requires BOTH a source's flag and that source's own enable bit in IE
+   before it can interrupt (the global EA is tested separately, at the top of
+   check_interrupts()).  Each term below therefore pairs a flag with its enable.
+   These must stay in step with the matching proposals in check_interrupts():
+   if this macro lets a call through but no proposal then matches, the dispatch
+   at the bottom of that function runs with int_vec still 0 and sets PC to the
+   reset vector.  There is a belt-and-braces test for that case there as well.
+   TIMER2_IRQ additionally tests the CPU subtype.  An 8051 has no Timer 2 at
+   all, but every Timer 2 guard in this file is compile-time (HAS_I8052 /
+   HAS_I8752 are properties of the build, not of the instance), so without a
+   runtime check the Timer 2 path also runs for I8051 instances -- spinb.c,
+   mephisto.c and alvgdmd.c all instantiate I8051. */
+#define EXT0_IRQ          (GET_IE0 && GET_EX0)
+#define TIMER0_IRQ        (GET_TF0 && GET_ET0)
+#define EXT1_IRQ          (GET_IE1 && GET_EX1)
+#define TIMER1_IRQ        (GET_TF1 && GET_ET1)
 #define SERIALPORT_IRQ    ((R_SCON & 0x03) && GET_ES)
 
 #if (HAS_I8052 || HAS_I8752)
-#ifdef PINMAME // otherwise no sound on spinball games
-#define NO_PENDING_IRQ  !(R_TCON & 0xaa) && !(SERIALPORT_IRQ) && !GET_TF2 && !GET_EXF2
+#define TIMER2_IRQ        (TYPE != 8051 && GET_ET2 && (GET_TF2 || GET_EXF2))
+#define NO_PENDING_IRQ  !(EXT0_IRQ) && !(TIMER0_IRQ) && !(EXT1_IRQ) && !(TIMER1_IRQ) && !(SERIALPORT_IRQ) && !(TIMER2_IRQ)
 #else
-#define NO_PENDING_IRQ  !(R_TCON & 0xaa) && !(SERIALPORT_IRQ) && !GET_ET2 //!GET_TF2 && !GET_EXF2
-#endif
-#else
-#define NO_PENDING_IRQ  !(R_TCON & 0xaa) && !(SERIALPORT_IRQ)
+#define NO_PENDING_IRQ  !(EXT0_IRQ) && !(TIMER0_IRQ) && !(EXT1_IRQ) && !(TIMER1_IRQ) && !(SERIALPORT_IRQ)
 #endif
 
 /* Clear Current IRQ  */
@@ -563,14 +585,21 @@ void i8051_reset(void *param)
 	i8051.iram_iwrite = internal_ram_write;		//Indirect ram read/write handled the same as direct for 8051!
 
 	//Set up serial call back handlers
+	//The hold_* statics are deliberately NOT cleared here.  A driver registers
+	//its callbacks once, from MACHINE_INIT, before the first reset; clearing them
+	//made the *second* and every later reset install NULL, leaving the CPU
+	//permanently unable to talk to its driver.  A driver that pulses this CPU's
+	//reset line -- mephisto.c drives RST ASIN that way -- needs the registration
+	//to survive every reset, not just the first.  See
+	//docs/findings/2026-08-31-sound-link-fixes.md.
 	i8051.serial_tx_callback = hold_serial_tx_callback;
-	hold_serial_tx_callback = NULL;
 	i8051.serial_rx_callback = hold_serial_rx_callback;
-	hold_serial_rx_callback = NULL;
 
-	//Setup External ram callback handlers
+	//Setup External ram callback handlers.  Same rule, and it stopped being
+	//hypothetical when mephisto.c registered one: RST ASIN resets that 8051
+	//dozens of times a minute, and clearing the static here put every paged
+	//MOVX @Ri back on page 0 from the second reset onwards.
 	i8051.eram_iaddr_callback = hold_eram_iaddr_callback;
-	hold_eram_iaddr_callback = NULL;
 
 	//Clear Ram (w/0xff)
 	memset(&i8051.IntRam,0xff,sizeof(i8051.IntRam));
@@ -608,7 +637,10 @@ void i8051_reset(void *param)
 /* Shut down CPU core */
 void i8051_exit(void)
 {
-	/* nothing to do */
+#ifdef I8051_SWEEP
+	sweep_irq_report();
+#endif
+	/* nothing else to do */
 }
 
 /* Execute cycles - returns number of cycles actually run */
@@ -1491,6 +1523,42 @@ void i8051_set_irq_line(int irqline, int state)
 		e) RI+TI
 		f) TF2+EXF2
  **********************************************************************************/
+/***********************************************************************************
+ I8051_SWEEP -- per-source interrupt dispatch counters (compiled out unless
+ -DI8051_SWEEP).
+
+ check_interrupts() proposes a vector in up to six separate if-blocks, each of
+ which may overwrite the previous one's i8051.int_vec.  Counting at those sites
+ would therefore over-count: a proposal is not a dispatch.  The counters below
+ are incremented at the single point where the dispatch is committed -- after
+ the last early-return, immediately before push_pc() -- so each increment is one
+ interrupt the CPU actually took.
+
+ Purpose: when a game's audio digest moves after a change to the enable-bit
+ logic, these say which of the five sources caused it.  Purely observational;
+ no emulation state is read or written that the core does not already read.
+ ***********************************************************************************/
+#ifdef I8051_SWEEP
+static unsigned long long sweep_irq_ie0  = 0;	/* External 0        */
+static unsigned long long sweep_irq_tf0  = 0;	/* Timer 0 overflow  */
+static unsigned long long sweep_irq_ie1  = 0;	/* External 1        */
+static unsigned long long sweep_irq_tf1  = 0;	/* Timer 1 overflow  */
+static unsigned long long sweep_irq_riti = 0;	/* Serial RI/TI      */
+static unsigned long long sweep_irq_tf2  = 0;	/* Timer 2 TF2/EXF2  */
+
+static void sweep_irq_report(void)
+{
+	static int reported = 0;
+	if (reported) return;
+	reported = 1;
+
+	printf("I8051_SWEEP IRQ ie0=%llu tf0=%llu ie1=%llu tf1=%llu riti=%llu tf2=%llu\n",
+		sweep_irq_ie0, sweep_irq_tf0, sweep_irq_ie1,
+		sweep_irq_tf1, sweep_irq_riti, sweep_irq_tf2);
+	fflush(stdout);
+}
+#endif /* I8051_SWEEP */
+
 INLINE UINT8 check_interrupts(void)
 {
 #if FIXIRQ
@@ -1510,42 +1578,40 @@ INLINE UINT8 check_interrupts(void)
 	//NOTE: The order of checking is based on the internal/default priority levels when levels are the same
 
 	//External Int 0
-	if(GET_IE0) {
+	if(EXT0_IRQ) {
 		//Set vector & priority level request
 		i8051.int_vec = V_IE0;
 		i8051.priority_request = GET_PX0;
 	}
 	//Timer 0 overflow
-	if(!i8051.priority_request && GET_TF0 && (!i8051.int_vec || (i8051.int_vec && GET_PT0))) {
+	if(!i8051.priority_request && TIMER0_IRQ && (!i8051.int_vec || (i8051.int_vec && GET_PT0))) {
 		//Set vector & priority level request
 		i8051.int_vec = V_TF0;
 		i8051.priority_request = GET_PT0;
 	}
 	//External Int 1
-	if(!i8051.priority_request && GET_IE1 && (!i8051.int_vec || (i8051.int_vec && GET_PX1))) {
+	if(!i8051.priority_request && EXT1_IRQ && (!i8051.int_vec || (i8051.int_vec && GET_PX1))) {
 		//Set vector & priority level request
 		i8051.int_vec = V_IE1;
 		i8051.priority_request = GET_PX1;
 	}
 	//Timer 1 overflow
-	if(!i8051.priority_request && GET_TF1 && (!i8051.int_vec || (i8051.int_vec && GET_PT1))) {
+	if(!i8051.priority_request && TIMER1_IRQ && (!i8051.int_vec || (i8051.int_vec && GET_PT1))) {
 		//Set vector & priority level request
 		i8051.int_vec = V_TF1;
 		i8051.priority_request = GET_PT1;
 	}
 	//Serial Interrupt Transmit/Receive Interrupts (Note: ES Bit - Serial Interrupts must be enabled)
-	if(!i8051.priority_request && GET_ES && (GET_TI || GET_RI) && (!i8051.int_vec || (i8051.int_vec && GET_PS))) {
+	if(!i8051.priority_request && SERIALPORT_IRQ && (!i8051.int_vec || (i8051.int_vec && GET_PS))) {
 		//Set vector & priority level request
 		i8051.int_vec = V_RITI;
 		i8051.priority_request = GET_PS;
 	}
 #if (HAS_I8052 || HAS_I8752)
-	//Timer 2 overflow (Either Timer Overflow OR External Interrupt)
-#ifdef PINMAME // otherwise no sound on spinball games
-	if(!i8051.priority_request && (GET_TF2 || GET_EXF2) && (!i8051.int_vec || (i8051.int_vec && GET_PT2))) {
-#else
-	if(!i8051.priority_request && GET_ET2 && (GET_TF2 || GET_EXF2) && (!i8051.int_vec || (i8051.int_vec && GET_PT2))) {
-#endif		//Set vector & priority level request
+	//Timer 2 overflow (Either Timer Overflow OR External Interrupt).
+	//TIMER2_IRQ gates on ET2 and on the CPU subtype -- see the macro's comment.
+	if(!i8051.priority_request && TIMER2_IRQ && (!i8051.int_vec || (i8051.int_vec && GET_PT2))) {
+		//Set vector & priority level request
 		i8051.int_vec = V_TF2;
 		i8051.priority_request = GET_PT2;
 	}
@@ -1555,7 +1621,27 @@ INLINE UINT8 check_interrupts(void)
 	if(i8051.cur_irq < 0xff && !i8051.priority_request)
 		{ LOG(("low priority irq in progress already, skipping low irq request\n")); return 0; }
 
+	//No source was actually selected above, so there is nothing to dispatch.
+	//Without this, PC would be set to int_vec == 0 -- i.e. the reset vector --
+	//with a return address pushed.  Reachable whenever NO_PENDING_IRQ and the
+	//proposals disagree, which the enable bits make possible if either is ever
+	//changed without the other.
+	if(!i8051.int_vec) return 0;
+
     /*** --- Perform the interrupt --- ***/
+
+#ifdef I8051_SWEEP
+	/* Committed: past every early return, the vector is final.  One increment
+	   here == one interrupt actually taken.  See the block above check_interrupts(). */
+	switch(i8051.int_vec) {
+		case V_IE0:  sweep_irq_ie0++;  break;
+		case V_TF0:  sweep_irq_tf0++;  break;
+		case V_IE1:  sweep_irq_ie1++;  break;
+		case V_TF1:  sweep_irq_tf1++;  break;
+		case V_RITI: sweep_irq_riti++; break;
+		case V_TF2:  sweep_irq_tf2++;  break;
+	}
+#endif
 
 	//Save current pc to stack, set pc to new interrupt vector
 	push_pc();
@@ -2071,6 +2157,38 @@ INLINE void do_sub_flags(UINT8 a, UINT8 data, UINT8 c)
 #endif
 }
 
+/* Timer 1 doubles as the UART's baud rate generator in serial modes 1 and 3,
+   which is the single most common 8051 UART configuration there is and was
+   left as a //TODO here until 2026-08-31.  Without it uart.bits_to_send never
+   reached 0 in mode 1, so update_serial() never called serial_tx_callback and
+   never set TI: a firmware that wrote SBUF in mode 1 transmitted exactly
+   nothing, forever.  mephisto.c's sound board (sport2k, mephisto, mephist1) is
+   the case that exposed it.
+
+   MCS-51: baud = (2^SMOD / 32) * (Timer 1 overflow rate), so one bit takes 32
+   Timer 1 overflows, or 16 with PCON.SMOD set.  Count the overflows rather
+   than spending a bit on each one.  (The Timer 2 baud block further down does
+   spend a bit per overflow, i.e. runs 16x fast; that is pre-existing and is
+   deliberately not touched here -- every 8052 game in the tree was measured
+   against it.) */
+INLINE void timer1_baud_tick(void)
+{
+	if(!uart.sending || !uart.bits_to_send || !uart.timerbaud)
+		return;
+#if (HAS_I8052 || HAS_I8752)
+	//An 8052 can clock the serial port from Timer 2 instead.  If it does, the
+	//Timer 2 block owns the bit clock and Timer 1 must keep out of it.  R_T2CON
+	//is always 0 on an I8051, so this costs those instances nothing.
+	if(GET_TCLK || GET_RCLK)
+		return;
+#endif
+	uart.baudcycles++;
+	if(uart.baudcycles >= (32 >> GET_SMOD)) {
+		uart.baudcycles = 0;
+		uart.bits_to_send-=1;
+	}
+}
+
 INLINE void update_timer(int cyc)
 {
 	//This code sucks, needs to be rewritten SJE
@@ -2185,7 +2303,8 @@ INLINE void update_timer(int cyc)
 				//Check for overflow
 				if((UINT32)(count+(cyc/12))>overflow) {
 
-					//TODO: Timer 1 can be set as Serial Baud Rate in the 8051 only... process bits here..
+					//Timer 1 can be set as Serial Baud Rate in the 8051 only
+					timer1_baud_tick();
 
 					//Any overflow from cycles?
 					cyc-= (int)(overflow-count)*12;
@@ -2218,6 +2337,9 @@ INLINE void update_timer(int cyc)
 				//Check for overflow
 				if((UINT32)(count+(cyc/12))>overflow) {
                     SET_TF1(1);
+					//Timer 1 can be set as Serial Baud Rate in the 8051 only.  This is
+					//the mode both Cirsa sound ROMs use (TH1 = TL1 = 0xFE).
+					timer1_baud_tick();
 					//Reload
 					count = R_TH1+(overflow-count);
 				}
@@ -2302,6 +2424,7 @@ INLINE void serial_transmit(UINT8 data)
 		case 1:
 			uart.timerbaud = 1;
 			uart.bits_to_send = 8+2;
+			uart.baudcycles = 0;
 			break;
 		//9 bit uart
 		case 2:
@@ -2367,14 +2490,12 @@ void i8752_reset (void *param)
 	i8051.iram_iwrite = i8052_internal_ram_iwrite;
 
 	//Set up serial call back handlers
+	//hold_* deliberately not cleared -- see the note in i8051_reset().
 	i8051.serial_tx_callback = hold_serial_tx_callback;
-	hold_serial_tx_callback = NULL;
 	i8051.serial_rx_callback = hold_serial_rx_callback;
-	hold_serial_rx_callback = NULL;
 
 	//Setup External ram callback handlers
 	i8051.eram_iaddr_callback = hold_eram_iaddr_callback;
-	hold_eram_iaddr_callback = NULL;
 
 	//Clear Ram (w/0xff)
 	memset(&i8051.IntRam,0xff,sizeof(i8051.IntRam));

@@ -1638,7 +1638,8 @@ PINMAMEAPI int PinmameGetMech(const int mechNo)
 
 PINMAMEAPI PINMAME_STATUS PinmameSetMech(const int mechNo, const PinmameMechConfig* const p_mechConfig)
 {
-	if (g_fHandleMechanics)
+   // Note that g_fHandleMechanics is also used with negative value to request a reset that will turn back to 0 after the reset is done. So we only check for > 0 here (see BOP for example).
+	if (g_fHandleMechanics > 0)
 		return PINMAME_STATUS_MECH_HANDLE_MECHANICS;
 
 	if (mechNo < 1 || mechNo > (MECH_MAXMECH / 2))
@@ -1885,19 +1886,31 @@ PINMAMEAPI int PinmameGetChangedNVRAM(PinmameNVRAMState* const p_nvramStates)
 
 PINMAMEAPI int PinmameReadMainCPUByte(const uint32_t address, uint8_t* const p_value)
 {
-	if (!_isRunning || p_value == nullptr)
+	return PinmameReadMainCPUMemory(address, p_value, 1);
+}
+
+/* A NULL from memory_get_read_ptr() means the read table holds a handler rather than
+   a direct pointer, not that the address is unreadable at all, se.c routes all of
+   Whitestar/Sega main RAM through ram_r. memory_find_base() has no bounds check. */
+
+static int ReadThroughRamBase(const uint32_t address, uint8_t* const p_buffer, const int size)
+{
+	const size_t regionLength = memory_region_length(REGION_CPU1);
+	if (address >= regionLength)
 	{
 		return 0;
 	}
 
-	uint8_t* p_memory = static_cast<uint8_t*>(memory_get_read_ptr(0, address));
-	if (p_memory == nullptr)
+	const uint8_t* const p_base = static_cast<const uint8_t*>(memory_find_base(0, address));
+	if (p_base == nullptr)
 	{
 		return 0;
 	}
 
-	*p_value = *p_memory;
-	return 1;
+	const int available = (int)std::min((size_t)size, regionLength - address);
+	memcpy(p_buffer, p_base, available);
+
+	return available;
 }
 
 /******************************************************
@@ -1916,7 +1929,7 @@ PINMAMEAPI int PinmameReadMainCPUMemory(const uint32_t address, uint8_t* const p
 		uint8_t* p_memory = static_cast<uint8_t*>(memory_get_read_ptr(0, address + i));
 		if (p_memory == nullptr)
 		{
-			return i;
+			return i > 0 ? i : ReadThroughRamBase(address, p_buffer, size);
 		}
 
 		p_buffer[i] = *p_memory;
@@ -2017,6 +2030,14 @@ static void GetSolenoid2VPMState(void* callContext, void* pResult)
    if (options.usemodsol & CORE_MODOUT_FORCE_ON)
       core_update_pwm_outputs(CORE_MODOUT_SOL0 + core_BitColToNum(srcId) + 32, 1);
    *static_cast<uint8_t*>(pResult) = (coreGlobals.solenoids2 & srcId) != 0 ? 1 : 0;
+}
+static void GetFlipperSolenoid2VPMState(void* callContext, void* pResult)
+{
+   assert(_isRunning == 1);
+   const int srcId = static_cast<StateMapping*>(callContext)->srcId;
+   if (options.usemodsol & CORE_MODOUT_FORCE_ON)
+      core_update_pwm_outputs(CORE_MODOUT_SOL0 + core_BitColToNum(srcId) + 32, 1);
+   *static_cast<uint8_t*>(pResult) = (coreGlobals.solenoids2 & srcId) != 0 ? 0xFF : 0;
 }
 static void GetCustomSolenoidState(void* callContext, void* pResult)
 {
@@ -2285,8 +2306,9 @@ static void SetupMsgApiGameStates()
                   case 35:mask = isFlipperCoil ? 0x40 : 0x40; break; // Power bit
                   case 36:mask = isFlipperCoil ? CORE_ULFLIPSOLBITS : 0x80; break; // Power|Hold bits
                   }
+                  const bool physOut = (options.usemodsol & (CORE_MODOUT_ENABLE_PHYSOUT_SOLENOIDS | CORE_MODOUT_ENABLE_MODSOL | CORE_MODOUT_FORCE_ON)) != 0;
                   addDevice(PMPI_GROUP_SOLENOID, label, nullptr, i, CTLPI_STATE_FORMAT_FLOAT, CTLPI_STATE_TYPE_CUSTOM, GetSolenoid2State, nullptr, mask);
-                  addDevice(PMPI_GROUP_VPM_SOLENOID, fmtString("%s", label), nullptr, i, CTLPI_STATE_FORMAT_UINT8, CTLPI_STATE_TYPE_CUSTOM, GetSolenoid2VPMState, nullptr, mask);
+                  addDevice(PMPI_GROUP_VPM_SOLENOID, fmtString("%s", label), nullptr, i, CTLPI_STATE_FORMAT_UINT8, CTLPI_STATE_TYPE_CUSTOM, (isFlipperCoil && physOut) ? GetFlipperSolenoid2VPMState : GetSolenoid2VPMState, nullptr, mask);
                }
             }
          }
@@ -2339,8 +2361,9 @@ static void SetupMsgApiGameStates()
             case 47:mask = 0x04; break; // Power bit
             case 48:mask = CORE_LLFLIPSOLBITS; break; // Power|Hold bits
             }
+            const bool physOut = (options.usemodsol & (CORE_MODOUT_ENABLE_PHYSOUT_SOLENOIDS | CORE_MODOUT_ENABLE_MODSOL | CORE_MODOUT_FORCE_ON)) != 0;
             addDevice(PMPI_GROUP_SOLENOID, label, nullptr, i, CTLPI_STATE_FORMAT_FLOAT, CTLPI_STATE_TYPE_CUSTOM, GetSolenoid2State, nullptr, mask);
-            addDevice(PMPI_GROUP_VPM_SOLENOID, fmtString("%s", label), nullptr, i, CTLPI_STATE_FORMAT_UINT8, CTLPI_STATE_TYPE_CUSTOM, GetSolenoid2VPMState, nullptr, mask);
+            addDevice(PMPI_GROUP_VPM_SOLENOID, fmtString("%s", label), nullptr, i, CTLPI_STATE_FORMAT_UINT8, CTLPI_STATE_TYPE_CUSTOM, physOut ? GetFlipperSolenoid2VPMState : GetSolenoid2VPMState, nullptr, mask);
          }
       }
       // 49, simulated fake plunger, not broadcasted
