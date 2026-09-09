@@ -535,6 +535,26 @@ void i8051_init(void)
 {
 	int cpu = cpu_getactivecpu();
 
+	//Drop any callbacks a PREVIOUS game registered.  These three statics are
+	//file scope, so without this they live for the whole process -- and
+	//libpinmame and VPinMAME run more than one game per process
+	//(PinmameRun/PinmameStop).  Run a spinb game, which registers both an
+	//eram_iaddr_callback and a serial callback, then stop and run an Alvin G
+	//game: alvgdmd.c instantiates an I8051 and registers nothing, so its DMD
+	//CPU would inherit spinb's eram_iaddr_callback and re-address every
+	//MOVX @Ri through another driver's state.  nuova.c has the same shape.
+	//
+	//This is the right place for it, and i8051_reset() is not: cpu_init()
+	//runs once per game start, from init_machine() (mame.c), and a driver's
+	//MACHINE_INIT -- where registration happens -- runs later, inside
+	//cpu_pre_run() (cpuexec.c), which calls machine_init() and only then
+	//cpunum_reset().  So registration still precedes the first reset and
+	//survives every later one, which is what the note in i8051_reset()
+	//needs, while a new game no longer inherits the old game's callbacks.
+	hold_serial_tx_callback = NULL;
+	hold_serial_rx_callback = NULL;
+	hold_eram_iaddr_callback = NULL;
+
 	//Internal stuff
 	state_save_register_UINT16("i8051", cpu, "PPC",       &i8051.ppc,    1);
 	state_save_register_UINT16("i8051", cpu, "PC",        &i8051.pc,     1);
@@ -1455,8 +1475,19 @@ void i8051_set_irq_line(int irqline, int state)
 						SET_IE0(1);		//Nope, just set it..
 				}
 			}
-			else
-				SET_IE0(0);		//Clear Int occurred flag
+			else {
+				//IE0 is a mirror of the pin only in LEVEL-triggered mode (IT0 = 0).
+				//In EDGE-triggered mode (IT0 = 1) it is a latch: hardware sets it on the
+				//1->0 transition and clears it only when the ISR is vectored to (which the
+				//V_IE0 case in check_interrupts() below does).  The line going away must
+				//therefore NOT withdraw a request that has already been latched, or every
+				//edge arriving while another ISR runs is lost -- which is what a PULSE_LINE
+				//driver such as alvgdmd.c's vblank does on every single assert.
+				//Cf. MAME src/devices/cpu/mcs51/i8051.cpp, handle_irq():
+				//    if (!BIT(m_tcon, TCON_IT0)) // clear if level triggered
+				if(!GET_IT0)
+					SET_IE0(0);	//Clear Int occurred flag
+			}
 			i8051.last_int0 = state;
 
 			//Do the interrupt & handle - remove machine cycles used
@@ -1479,8 +1510,19 @@ void i8051_set_irq_line(int irqline, int state)
 					SET_IE1(1);		//Nope, just set it..
 				}
 			}
-			else
-				SET_IE1(0);		//Clear Int occurred flag
+			else {
+				//IE1 is a mirror of the pin only in LEVEL-triggered mode (IT1 = 0).
+				//In EDGE-triggered mode (IT1 = 1) it is a latch: hardware sets it on the
+				//1->0 transition and clears it only when the ISR is vectored to (which the
+				//V_IE1 case in check_interrupts() below does).  The line going away must
+				//therefore NOT withdraw a request that has already been latched, or every
+				//edge arriving while another ISR runs is lost -- which is what a PULSE_LINE
+				//driver such as alvgdmd.c's vblank does on every single assert.
+				//Cf. MAME src/devices/cpu/mcs51/i8051.cpp, handle_irq():
+				//    if (!BIT(m_tcon, TCON_IT1)) // clear if level triggered
+				if(!GET_IT1)
+					SET_IE1(0);	//Clear Int occurred flag
+			}
 			i8051.last_int1 = state;
 
 			//Do the interrupt & handle - remove machine cycles used
@@ -1618,8 +1660,24 @@ INLINE UINT8 check_interrupts(void)
 #endif
 
 	//Skip the interrupt request if currently processing is lo priority, and the new request IS NOT HI PRIORITY!
+	//A proposal that is not dispatched must not survive the call.  Every entry to
+	//check_interrupts() re-proposes from the live flags, so discarding it here
+	//loses nothing; leaving it set makes a LATER call dispatch a vector whose flag
+	//has since been cleared, because the proposals above are all gated on
+	//!i8051.int_vec (so nothing can overwrite the stale one at equal priority) and
+	//the commit below only tests that it is non-zero.  Measured on `mephisto`,
+	//whose sound ROM leaves IP = 0 so every serial interrupt takes this path: 56
+	//serial dispatches for 28 real events, i.e. the serial ISR ran twice per byte
+	//and its receive state machine saw every byte of every command packet twice.
+	//`sport2k` sets IP = 0x10 (PS), so its serial vector never reaches this return
+	//and it is bit-identical either way.  See
+	//docs/findings/2026-09-02-audio-firmware.md section 8.
+	//Only int_vec needs clearing: priority_request is already 0 on this path --
+	//that is half of the condition for taking it -- and the two are only ever set
+	//together, so int_vec == 0 on entry implies priority_request == 0 as well.
 	if(i8051.cur_irq < 0xff && !i8051.priority_request)
-		{ LOG(("low priority irq in progress already, skipping low irq request\n")); return 0; }
+		{ i8051.int_vec = 0;
+		  LOG(("low priority irq in progress already, skipping low irq request\n")); return 0; }
 
 	//No source was actually selected above, so there is nothing to dispatch.
 	//Without this, PC would be set to int_vec == 0 -- i.e. the reset vector --
@@ -2490,7 +2548,6 @@ void i8752_reset (void *param)
 	i8051.iram_iwrite = i8052_internal_ram_iwrite;
 
 	//Set up serial call back handlers
-	//hold_* deliberately not cleared -- see the note in i8051_reset().
 	i8051.serial_tx_callback = hold_serial_tx_callback;
 	i8051.serial_rx_callback = hold_serial_rx_callback;
 

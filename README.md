@@ -127,7 +127,7 @@ and listen to/record the pinball game sounds with the pure PinMAME package itsel
 - *Barni* - Red Baron (1985)
 - *Splin Bingo* -  Golden Game
 - *Playbar* - Bloody Roller
-- *Cirsa*
+- *Cirsa* - Sport 2000 (1988)
 - *Nondum / CIFA*
 - *Maibesa*
 - *ManilaMatic*
