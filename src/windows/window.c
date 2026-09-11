@@ -293,8 +293,7 @@
  // sw is the source IMAGE width, sp its row PITCH in pixels; they differ whenever the
  // visible width is not a multiple of 4, because win_perform_blit() pads each row out
  // to params.dstpitch.  Passing the pitch as the width (as this used to be called)
- // scales the padding in as picture: every DMD game is affected, since core_findSize()
- // returns (left+length)*cols + 1 for CORE_DMD/CORE_VIDEO, which is always odd
+ // scales that padding in as picture
  static void bm_resample(const int fmt, void *dstbits, const int dw, const int dp, const int dh, const void *srcbits, const int sw, const int sp, const int sh)
  {
 	const int dbpp = bm_bpp(fmt);
@@ -506,7 +505,13 @@ static UINT8 video_dib_info_data[sizeof(BITMAPINFO) + 256 * sizeof(RGBQUAD)];
 static BITMAPINFO *video_dib_info = (BITMAPINFO *)video_dib_info_data;
 static UINT8 debug_dib_info_data[sizeof(BITMAPINFO) + 256 * sizeof(RGBQUAD)];
 static BITMAPINFO *debug_dib_info = (BITMAPINFO *)debug_dib_info_data;
-static UINT8 converted_bitmap[MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT * 4];
+// Must be 16-byte aligned, as the blit wants: this used to be rounded up into
+// params.dstdata while GDI was still handed the array, and on x86/VS2022 the two then differed by 8 bytes, showing every row 4 pixels off (#535)
+#ifdef _MSC_VER
+static __declspec(align(16)) UINT8 converted_bitmap[MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT * 4];
+#else
+static UINT8 converted_bitmap[MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT * 4] __attribute__((aligned(16)));
+#endif
 
 // video bounds
 static double aspect_ratio;
@@ -764,10 +769,13 @@ INLINE void get_work_area(RECT *maximum)
 
 	if (SystemParametersInfo(SPI_GETWORKAREA, 0, maximum, 0))
 	{
+		const int extrawidth  = wnd_extra_width();
+		const int extraheight = wnd_extra_height();
+
 		// clamp to the width specified
-		if (tempwidth && (maximum->right - maximum->left) > (tempwidth + wnd_extra_width()))
+		if (tempwidth && (maximum->right - maximum->left) > (tempwidth + extrawidth))
 		{
-			int diff = (maximum->right - maximum->left) - (tempwidth + wnd_extra_width());
+			int diff = (maximum->right - maximum->left) - (tempwidth + extrawidth);
 			if (diff > 0)
 			{
 				maximum->left += diff / 2;
@@ -776,9 +784,9 @@ INLINE void get_work_area(RECT *maximum)
 		}
 
 		// clamp to the height specified
-		if (tempheight && (maximum->bottom - maximum->top) > (tempheight + wnd_extra_height()))
+		if (tempheight && (maximum->bottom - maximum->top) > (tempheight + extraheight))
 		{
-			int diff = (maximum->bottom - maximum->top) - (tempheight + wnd_extra_height());
+			int diff = (maximum->bottom - maximum->top) - (tempheight + extraheight);
 			if (diff > 0)
 			{
 				maximum->top += diff / 2;
@@ -838,9 +846,7 @@ int win_init_window(void)
 			if (!RegisterClass(&wc))
 				return 1;
 		}
-		#ifdef VPINMAME
-		classes_created = 1;
-		#endif
+		classes_created = 1; // registered process-wide: a second call must not re-register
 	}
 
 	// make the window title
@@ -912,9 +918,10 @@ int win_create_window(int width, int height, int depth, int attributes, double a
 
 	memset(converted_bitmap,0,sizeof(converted_bitmap));
 
-	// adjust the window position
+	// No extra 2 for MAME's 1 pixel surround: VPinMAME stretches the client, so anything
+	// larger than the image there is a rescale (blur).  wnd_extra_*() is the frame itself
 	set_aligned_window_pos(win_video_window, NULL, 20, 20,
-			width + wnd_extra_width() + 2, height + wnd_extra_height() + 2,
+			width + wnd_extra_width(), height + wnd_extra_height(),
 			SWP_NOZORDER);
 
 	// make sure we paint the window once here
@@ -931,7 +938,7 @@ int win_create_window(int width, int height, int depth, int attributes, double a
 	video_dib_info->bmiHeader.biClrImportant	= 0;
 
 	// initialize the palette to a gray ramp
-	for (i = 0; i < 255; i++)
+	for (i = 0; i < 256; i++)
 	{
 		video_dib_info->bmiColors[i].rgbRed			= i;
 		video_dib_info->bmiColors[i].rgbGreen		= i;
@@ -1115,12 +1122,17 @@ static void draw_video_contents(HDC dc, struct mame_bitmap *bitmap, const struct
 		return;
 	}
 	last = bitmap;
+#ifdef PINMAME
+	last_video_bitmap = bitmap; // the PINMAME 'last' above is a local, so keep the global in step
+#endif
 
 	// if we're iconic, don't bother
 	if (IsIconic(win_video_window))
 		return;
 
-	// if we're in a window, constrain to a 16-byte aligned boundary
+	// if we're in a window, constrain to a 16-byte aligned boundary (get_aligned_window_pos()
+	// is the identity under PINMAME, so this would be a GetWindowRect() per frame for nothing)
+#ifndef PINMAME
 	if (win_window_mode && !update)
 	{
 		RECT original;
@@ -1131,6 +1143,7 @@ static void draw_video_contents(HDC dc, struct mame_bitmap *bitmap, const struct
 		if (newleft != original.left)
 			SetWindowPos(win_video_window, NULL, newleft, original.top, 0, 0, SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE);
 	}
+#endif
 
 	// if we have a blit surface, use that
 
@@ -1202,10 +1215,10 @@ static LRESULT CALLBACK video_window_proc(HWND wnd, UINT message, WPARAM wparam,
 		{
 			PAINTSTRUCT pstruct;
 			HDC hdc = BeginPaint(wnd, &pstruct);
- 			if (win_video_window)
-			draw_video_contents(hdc, NULL, NULL, 1);
- 			if (win_has_menu())
- 				DrawMenuBar(win_video_window);
+			if (win_video_window)
+				draw_video_contents(hdc, NULL, NULL, 1);
+			if (win_has_menu())
+				DrawMenuBar(win_video_window);
 			EndPaint(wnd, &pstruct);
 			break;
 		}
@@ -1215,8 +1228,8 @@ static LRESULT CALLBACK video_window_proc(HWND wnd, UINT message, WPARAM wparam,
 		{
 			MINMAXINFO *minmax = (MINMAXINFO *)lparam;
 #ifdef VPINMAME
-			minmax->ptMinTrackSize.x = win_visible_width + 2 + wnd_extra_width();
-			minmax->ptMinTrackSize.y = win_visible_height + 2 + wnd_extra_height();
+			minmax->ptMinTrackSize.x = win_visible_width + wnd_extra_width();
+			minmax->ptMinTrackSize.y = win_visible_height + wnd_extra_height();
 #else
 			minmax->ptMinTrackSize.x = MIN_WINDOW_DIM;
 			minmax->ptMinTrackSize.y = MIN_WINDOW_DIM;
@@ -1346,7 +1359,10 @@ void win_constrain_to_aspect_ratio(RECT *rect, int adjustment, int constraints, 
 
 	// if we're not forcing the aspect ratio, just return the intersection
 	if (!win_keep_aspect)
+	{
+		*rect = rectcopy;
 		return;
+	}
 
 	if (constraints == CONSTRAIN_INTEGER_WIDTH)
 	{
@@ -1494,7 +1510,7 @@ void win_adjust_window_for_visible(int min_x, int max_x, int min_y, int max_y)
 
  		GetWindowRect(win_video_window, &r);
  		r.right += (win_visible_width - old_visible_width) * xmult;
- 		r.left += (win_visible_height - old_visible_height) * ymult;
+ 		r.bottom += (win_visible_height - old_visible_height) * ymult;
  		set_aligned_window_pos(win_video_window, NULL, r.left, r.top,
  				r.right - r.left,
  				r.bottom - r.top,
@@ -1644,12 +1660,14 @@ void win_toggle_maximize(void)
 		if (win_use_directx != USE_D3D && (win_use_directx != USE_DDRAW || !win_dd_hw_stretch))
 		{
 			int xmult, ymult;
+			const int extrawidth  = wnd_extra_width();
+			const int extraheight = wnd_extra_height();
 
-			current.right -= wnd_extra_width() + 2;
-			current.bottom -= wnd_extra_height() + 2;
+			current.right  -= extrawidth;
+			current.bottom -= extraheight;
 			win_compute_multipliers(&current, &xmult, &ymult);
-			current.right = current.left + win_visible_width * xmult + wnd_extra_width() + 2;
-			current.bottom = current.top + win_visible_height * ymult + wnd_extra_height() + 2;
+			current.right = current.left + win_visible_width  * xmult + extrawidth;
+			current.bottom = current.top + win_visible_height * ymult + extraheight;
 		}
 
 		// center it
@@ -1725,7 +1743,7 @@ void win_toggle_full_screen(void)
 						SWP_NOZORDER);
 		else
 		{
-			set_aligned_window_pos(win_video_window, HWND_TOP, 0, 0, win_visible_width + 2, win_visible_height + 2, SWP_NOZORDER);
+			set_aligned_window_pos(win_video_window, HWND_TOP, 0, 0, win_visible_width, win_visible_height, SWP_NOZORDER);
 			win_toggle_maximize();
 		}
 #endif
@@ -1937,7 +1955,7 @@ static void dib_draw_window(HDC dc, struct mame_bitmap *bitmap, const struct rec
 	win_compute_multipliers(&client, &xmult, &ymult);
 
 	// blit to our temporary bitmap
-	params.dstdata		= (void *)(((size_t)converted_bitmap + 15) & ~15);
+	params.dstdata		= converted_bitmap; //(void *)(((size_t)converted_bitmap + 15) & ~15); // always 16b aligned
 	params.dstpitch		= (((win_visible_width * xmult) + 3) & ~3) * depth / 8;
 	params.dstdepth		= depth;
 	params.dstxoffs		= 0;
@@ -1995,12 +2013,23 @@ static void dib_draw_window(HDC dc, struct mame_bitmap *bitmap, const struct rec
 	cy = client.top + ((client.bottom - client.top) - win_visible_height * ymult) / 2;
 #endif
 
-	// blit to the screen
-	if ((video_dib_info->bmiHeader.biWidth == params.dstpitch / (depth / 8)) &&
-		((client.bottom - client.top) == win_visible_height * ymult)) // perfect pixel match?
-		SetDIBitsToDevice(dc, 0, 0, (client.right - client.left), (client.bottom - client.top),
-		                  0, 0, 0, (client.bottom - client.top),
-		                  converted_bitmap, video_dib_info, DIB_RGB_COLORS);
+	// Blit to the screen.  SetDIBitsToDevice never scales, so it also serves a client the
+	// image merely fits in - fullscreen, where it is centered and erase_outer_rect() blacks
+	// out the surround.  VPinMAME stretches to fill instead, so there it must match exactly
+#ifndef VPINMAME
+	{ const int dstx = cx, dsty = cy;
+	  const int fits = ((client.right - client.left) >= win_visible_width  * xmult) &&
+	                   ((client.bottom - client.top) >= win_visible_height * ymult);
+#else
+	{ const int dstx = 0, dsty = 0;
+	  const int fits = ((client.right - client.left) == win_visible_width  * xmult) &&
+	                   ((client.bottom - client.top) == win_visible_height * ymult);
+#endif
+	// (the stride test only bites in the VPinMAME build - FAST_NN_BLIT assigned biWidth from params.dstpitch above, so there it is always true)
+	if ((video_dib_info->bmiHeader.biWidth == params.dstpitch / (depth / 8)) && fits)
+		SetDIBitsToDevice(dc, dstx, dsty, win_visible_width * xmult, win_visible_height * ymult,
+		                  0, 0, 0, win_visible_height * ymult,
+		                  params.dstdata, video_dib_info, DIB_RGB_COLORS);
 	else
 #ifdef FAST_NN_BLIT
 	{
@@ -2011,7 +2040,7 @@ static void dib_draw_window(HDC dc, struct mame_bitmap *bitmap, const struct rec
 	StretchDIBits(dc, 0, 0, (client.right - client.left), (client.bottom - client.top),
 #endif
 	              0, 0, win_visible_width * xmult, win_visible_height * ymult,
-	              converted_bitmap, video_dib_info, DIB_RGB_COLORS, SRCCOPY);
+	              params.dstdata, video_dib_info, DIB_RGB_COLORS, SRCCOPY);
 	}
 #else
 	{
@@ -2028,15 +2057,15 @@ static void dib_draw_window(HDC dc, struct mame_bitmap *bitmap, const struct rec
 		case 16: //!! 16 also seems to mean 15??!
 		case 15:
 			bm_resample(X1R5G5B5, upscale_bitmap, (client.right - client.left), video_dib_info->bmiHeader.biWidth, (client.bottom - client.top),
-			            converted_bitmap, win_visible_width * xmult, params.dstpitch / (depth / 8), win_visible_height * ymult);
+			            params.dstdata, win_visible_width * xmult, params.dstpitch / (depth / 8), win_visible_height * ymult);
 			break;
 		case 24:
 			bm_resample(R8G8B8, upscale_bitmap, (client.right - client.left), video_dib_info->bmiHeader.biWidth, (client.bottom - client.top),
-			            converted_bitmap, win_visible_width * xmult, params.dstpitch / (depth / 8), win_visible_height * ymult);
+			            params.dstdata, win_visible_width * xmult, params.dstpitch / (depth / 8), win_visible_height * ymult);
 			break;
 		case 32:
 			bm_resample(X8R8G8B8, upscale_bitmap, (client.right - client.left), video_dib_info->bmiHeader.biWidth, (client.bottom - client.top),
-			            converted_bitmap, win_visible_width * xmult, params.dstpitch / (depth / 8), win_visible_height * ymult);
+			            params.dstdata, win_visible_width * xmult, params.dstpitch / (depth / 8), win_visible_height * ymult);
 			break;
 		default:
 			logerror("Cannot Resample, unknown bit depth");
@@ -2048,6 +2077,7 @@ static void dib_draw_window(HDC dc, struct mame_bitmap *bitmap, const struct rec
 		                  upscale_bitmap, video_dib_info, DIB_RGB_COLORS);
 	}
 #endif
+	}
 
 #ifndef VPINMAME
 	// erase the edges if updating
@@ -2242,6 +2272,9 @@ static void draw_debug_contents(HDC dc, struct mame_bitmap *bitmap, const rgb_t 
 		return;
 	}
 	last_bitmap = bitmap;
+#ifdef PINMAME
+	last_debug_bitmap = bitmap; // as in draw_video_contents(), 'last_bitmap' is a local here
+#endif
 	last_palette = palette;
 
 	// if we're iconic, don't bother
