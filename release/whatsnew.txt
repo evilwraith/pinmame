@@ -32,7 +32,7 @@ Get rid of BASS external dependency (used for internal AltSound mode 1 support) 
 *** CORE/CPU ***
 Added Pinball 2000 emulation. It works in principle, but the CPU is clocked way too low (0.33x) for performance reasons (for now)! Still, it seems to work reasonably well, most likely as the graphics/video part is not emulated cycle-accurate and thus much faster than the clock rate implies.
 Added Recreativos Franco emulation (Super Star), including improved i8085 emulation
-Added Recel System III emulation (Fair Fight)
+Added Recel System III emulation (Fair Fight, Mr. Evil, Mr. Doom)
 Fixed and extended Sleic emulation (Bike Race, Io Moon, Pin-Ball), including some i86 fixes
 Fixed and extended Cirsa Sport 2000, including more i86 fixes and i8256 emulation
 Fixed and extended Stargame Mephisto, dto.
@@ -83,6 +83,9 @@ Caveman should now work consistently (also via i86 fixes)
 *** ROM SUPPORT *** Thanks to Tom Collins/Scorbit, Paul Swan, Dieter Werner, Victor Fernandez, Jordi Beltran, ipdb.org, Billc479, Scott Charles, inkochnito, frisbez, Chad Hendrickson, idealjoker, ingo333, RedBall, Quench, slochar, Jesus Carballo, Rockman i uri666arcade de l'associació ARCADE (Recreativas.org), myPinballs, hemtoni
 New:
 IDSA: Fantastic Car
+Recel System III: Fair Fight
+                  Mr. Evil
+                  Mr. Doom
 Recreativos Franco: Super Star rev. 1, 2, 3, 4
 WMS:  Revenge From Mars 1.60, 1.50, 1.40, 1.30, 1.20 (official updates)
                         0.87, 0.86, 0.85, 0.84, 0.71, 0.70 (prototype updates)
