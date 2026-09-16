@@ -212,6 +212,8 @@ add_library(vpinmame SHARED
    src/inptport.h
    src/input.c
    src/input.h
+   src/keyscript.c
+   src/keyscript.h
    src/machine/4094.c
    src/machine/4094.h
    src/machine/6522via.c
@@ -534,6 +536,7 @@ add_library(vpinmame SHARED
    src/wpc/sims/s11/prelim/eatpm.c
    src/wpc/sims/s7/full/bk.c
    src/wpc/sims/s7/full/tmfnt.c
+   src/wpc/sims/sleic/iomoon.c
    src/wpc/slalom.c
    src/wpc/sleic.c
    src/wpc/sleic.h

@@ -89,6 +89,10 @@ if(NOT MSVC)
    # /GR-: no RTTI (the code uses no dynamic_cast/typeid), C++ only
    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
 
+   # Apple clang still defaults to -fcommon, and the common symbols of the large tables make ld warn
+   # about the __DATA,__common section alignment; GCC 10+ and upstream clang 11+ default to this already
+   add_compile_options($<$<COMPILE_LANGUAGE:C>:-fno-common>)
+
    # /Gy + COMDAT folding: emit per-function/data sections and let the linker strip unused ones
    add_compile_options(-ffunction-sections -fdata-sections)
    if(APPLE)
@@ -316,6 +320,8 @@ set(PINMAME_SOURCES
    src/inptport.h
    src/input.c
    src/input.h
+   src/keyscript.c
+   src/keyscript.h
    src/machine/4094.c
    src/machine/4094.h
    src/machine/6522via.c
@@ -638,6 +644,7 @@ set(PINMAME_SOURCES
    src/wpc/sims/s11/prelim/eatpm.c
    src/wpc/sims/s7/full/bk.c
    src/wpc/sims/s7/full/tmfnt.c
+   src/wpc/sims/sleic/iomoon.c
    src/wpc/slalom.c
    src/wpc/sleic.c
    src/wpc/sleic.h
