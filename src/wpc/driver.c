@@ -1023,6 +1023,8 @@ DRIVERNV(r_hotcold)     //Hot & Cold (1978)
 DRIVERNV(r_swash)       //Swash Buckler (1979)
 DRIVERNV(r_cavalier)    //Cavalier (1979)
 DRIVERNV(r_quijote)     //Don Quijote (1979)
+DRIVERNV(r_torneo)      //Torneo (1978)
+DRIVERNV(r_torneoa)     //Torneo (corrected dump, 3 balls)
 DRIVERNV(r_crzyrace)    //Crazy Race (1978)
 DRIVERNV(r_flipper)     //The Flipper Game (1980)
 DRIVERNV(r_blackmag)    //Black Magic (1980)
@@ -1406,10 +1408,13 @@ DRIVER  (harl,l13)      //           10/99 Harley-Davidson (Sega, 1.03 Spanish)
 DRIVERNV(bikerace)      // 1992 - Bike Race
 DRIVERNV(bikerac2)      // 1992 - Bike Race (2-ball play)
 DRIVERNV(bikerac3)      // 1992 - Bike Race (V4.1)
+DRIVERNV(bikerc3f)      // 1992 - Bike Race (V4.1, press start MOD, free play)
 DRIVERNV(sleicpin)      // 1993 - Sleic Pin-Ball
+DRIVERNV(sleicpnf)      // 1993 - Sleic Pin-Ball (end-of-game scores MOD, free play)
 DRIVERNV(iomoon)        // 1994 - Io Moon
 DRIVERNV(iomoona)       // 1994 - Io Moon (earlier ROM revision)
 DRIVERNV(iomoont)       // 1994 - Io Moon (PRESS START tournament MOD)
+DRIVERNV(iomoontf)      // 1994 - Io Moon (tournament MOD, free play)
                         // 1996 - Dona Elvira 2
 
 // ----------------

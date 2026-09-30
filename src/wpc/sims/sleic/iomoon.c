@@ -21,16 +21,17 @@
        Q  Drain                        Del  switch to the matrix test keys
    Space  Plunge the served ball      Down  follow the next ball after a drain
 
- A legitimate Jupiter lock -- every ORBITS lamp lit, holding for Multiball -- is
- released by the game through coil 16; the timeout in iomoon_releaseHeld only
- fires when no release comes at all.  Which ORBITS lamps those are is F18 and not
- established, so nothing here reads the lamp matrix.
+ The lamp matrix (F18) carries two rules no coil can show here: Jupiter holds a
+ ball only with every ORBITS lamp lit (3.3.7), and Ramp 1's diverter follows the
+ Lagrange pair (3.3.2).  A held ball still leaves on coil 16; the wait is a safety
+ net, not the mechanism.
 
  PLAY-TESTED headless, with scripted keys: all three sets through a whole
  three-ball game -- served ball, plunge, drop targets, an orbit shot, a drain,
  and the next ball's serve, which is where the bank reset raises the targets
- again -- plus Hole 1 leaving on its own coil, and Hole 2 and both Jupiter locks
- freeing themselves.  Nothing here is play-tested on a real machine.
+ again -- plus Hole 1 leaving on its own coil, Jupiter passing a ball through with
+ the ORBITS lights out and holding two with them lit to reach Multiball, and Ramp 1
+ reaching MIDDLE only with Lagrange Orbit lit.  Nothing is tested on a machine
  ******************************************************************************/
 
 #include "driver.h"
@@ -47,9 +48,9 @@ static int  iomoon_handleBallState(sim_tBallStatus *ball, int *inports);
 /*-------------------
 / Switch definitions
 /--------------------
-/  Names and C-numbers are the firmware's own (F16).  PinMAME switch numbers come
-/  from SLEIC_sw2m: swMatrix[m] bit b is switch (m+4)*10 + b, and the driver puts
-/  Z80 column c in swMatrix[1+c], so column 0 is 50-57 and column 5 is 100-103.  */
+/  PinMAME switch numbers come from SLEIC_sw2m: swMatrix[m] bit b is switch
+/  (m+4)*10 + b, and the driver puts Z80 column c in swMatrix[1+c], so column 0 is
+/  50-57 and column 5 is 100-103.  Names and C-numbers are the firmware's own */
 #define swOutholeC0     50  /* code 0x0A  C6  OUTHOLE 1 -- trough entry, ball-over */
 #define swOutholeC1     51  /* code 0x0B  C7  OUTHOLE 2 */
 #define swOutholeC2     52  /* code 0x0C  C8  OUTHOLE 3 -- the served end */
@@ -59,7 +60,7 @@ static int  iomoon_handleBallState(sim_tBallStatus *ball, int *inports);
 #define swLFlipEOS      56  /* code 0x10  C11 L.C.FLIPPER */
 #define swRFlipEOS      57  /* code 0x11  C10 R.C.FLIPPER */
 #define swLane11        60  /* code 0x12  C22 */
-#define swRamp1Exit     61  /* code 0x13  C21 -- fitted, firmware ignores it */
+#define swRamp1Exit     61  /* code 0x13  C21 -- not fitted (2.1.1); no state closes it */
 #define swUFlipEOS      62  /* code 0x14  C19 U.C.FLIPPER */
 #define swRightShooter  63  /* code 0x15  C16 RIGHT SHOOTER (Expulsor 2) */
 #define swLeftShooter   64  /* code 0x16  C15 LEFT SHOOTER  (Expulsor 1) */
@@ -133,8 +134,8 @@ enum {
   stBullEye1, stBullEye2, stLeftShooter, stRightShooter,
   stBankA, stBankB, stBankC, stBankD, stBankE, stInnerBank,
   stHole1, stHole2,
-  stRamp1Ent, stRamp1Mid, stRamp1Exit, stRamp2Ent, stRamp2Exit,
-  stJupEnt, stJup1, stJup2, stJup3
+  stRamp1Ent, stRamp1Mid, stRamp2Ent, stRamp2Exit,
+  stJupEnt, stJupPass, stJupC44, stJupC45
 };
 
 static sim_tState iomoon_stateDef[] = {
@@ -195,27 +196,60 @@ static sim_tState iomoon_stateDef[] = {
      leaves iomoon_handleBallState to time it out (F17 addendum) */
   {"Hole 2",           1,swHole2,      0,           0,           0},
 
-  {"Ramp 1 Entrance",  1,swRamp1Ent,   0,           stRamp1Mid,  3},
-  {"Ramp 1 Middle",    1,swRamp1Mid,   0,           stRamp1Exit, 3},
-  {"Ramp 1 Exit",      1,swRamp1Exit,  0,           stFree,      3},
+  /* Ramp 1 is sensed at its entrance and its middle only -- C21 is not fitted.  The
+     entrance takes nextState 0 so iomoon_handleBallState can route the diverter */
+  {"Ramp 1 Entrance",  1,swRamp1Ent,   0,           0,           3},
+  {"Ramp 1 Middle",    1,swRamp1Mid,   0,           stFree,      3},
   {"Ramp 2 Entrance",  1,swRamp2Ent,   0,           stRamp2Exit, 4},
   {"Ramp 2 Exit",      1,swRamp2Exit,  0,           stFree,      3},
 
-  /* Jupiter holds up to two balls (manual 3.3.7).  A ball entering goes to lock 1,
-     or to lock 2 if lock 1 is already closed.  Locks 1 and 2 leave through
-     iomoon_handleBallState for the reason Hole 2 does, hence nextState 0 and
-     SIM_STIGNORESOL */
-  {"Jupiter Entrance", 1,swJupEnt,     0,           stJup1,      3, swJup1, stJup2, SIM_STSWON},
-  {"Jupiter 1",        1,swJup1,       sJupRelease, 0,           0,0,0, SIM_STIGNORESOL},
-  {"Jupiter 2",        1,swJup2,       sJupRelease, 0,           0,0,0, SIM_STIGNORESOL},
-  {"Jupiter 3",        1,swJup3,       sJupRelease, stFree,      0},
+  /* Jupiter holds up to two balls (manual 3.3.7), and the two CPUs use different
+     contacts for it: a ball ROLLS OVER C46, the only one the Z80 reports (remapped code
+     0x44, which the 80188 counts in [4134:0030]), and comes to REST at the far end on
+     C44, which is the contact the Z80's own release keys on -- command 0xEE, sub_2B86,
+     returns without firing coil 16 unless C44 reads closed.  The second ball rests on
+     C45 and rolls down when C44 empties */
+  {"Jupiter Entrance", 1,swJupEnt,     0,           stJupPass,   3},
+  {"Jupiter (C46)",    1,swJup3,       0,           0,           3},
+  {"Jupiter 1 (C44)",  1,swJup1,       sJupRelease, 0,           0,0,0, SIM_STIGNORESOL},
+  {"Jupiter 2 (C45)",  1,swJup2,       0,           0,           0},
 
   {0}
 };
 
-/* Frames a held ball waits for its release coil before freeing itself: 5 s at the 60 Hz
-   VBLANK, far longer than any kick the firmware is seen to make */
-#define IOMOON_HELD_FREE 300
+/*------------------------------------
+/  The two lamp reads the coils cannot
+/-------------------------------------*/
+/* F18's matrix: the six ORBITS letters are column 2 bits 0-5, the Lagrange pair
+   LPA11/LPA12 column 4 bits 2 and 3.  The letters can blink, so they are OR-ed over a
+   short window; the pair is steady and never shows both, so it is read as it stands */
+#define IOMOON_ORBITS_ALL  0x3f
+#define IOMOON_LAMP_WINDOW 8
+
+static struct { UINT8 now, prev; int frame; } iomoon_orbits;
+
+static void iomoon_sampleLamps(void) {
+  iomoon_orbits.now |= coreGlobals.lampMatrix[2];
+  if (++iomoon_orbits.frame >= IOMOON_LAMP_WINDOW) {
+    iomoon_orbits.prev  = iomoon_orbits.now;
+    iomoon_orbits.now   = 0;
+    iomoon_orbits.frame = 0;
+  }
+}
+
+/* 3.3.7: Jupiter retains nothing until every ORBITS lamp is lit */
+static int iomoon_orbitsLit(void) {
+  return ((iomoon_orbits.now | iomoon_orbits.prev) & IOMOON_ORBITS_ALL) == IOMOON_ORBITS_ALL;
+}
+
+/* 3.3.2: LPA11 (Lagrange Scape) fires Ramp 1's diverter, LPA12 (Lagrange Orbit) does not */
+static int iomoon_diverterFires(void) {
+  return (coreGlobals.lampMatrix[4] & 0x0c) == 0x04;
+}
+
+/* Frames a held ball waits for its release coil before freeing itself: 15 s at the 60 Hz
+   VBLANK.  A safety net for a release that never comes, not a mechanism */
+#define IOMOON_HELD_FREE 900
 
 /* Free a held ball on its release coil, and otherwise once the wait runs out.  <sol> 0
    means the device commands no coil at all, so the wait is its only exit */
@@ -243,12 +277,24 @@ static int iomoon_handleBallState(sim_tBallStatus *ball, int *inports) {
     case stHole2:
       return iomoon_releaseHeld(ball, 0);
 
-    /* Jupiter releases with coil 16, and manual 3.3.7 says it holds no ball at all until
-       every ORBITS lamp is lit -- so a release that never comes is the game declining the
-       ball, and the ball passing through is the ordinary case */
-    case stJup1:
-    case stJup2:
+    /* Diverted, the ball leaves before RAMP 1 MIDDLE -- which is where the orbit is
+       banked (sub_D8E3F -> sub_D8EE1), not at the entrance */
+    case stRamp1Ent:
+      return iomoon_diverterFires() ? setState(stFree, 4) : setState(stRamp1Mid, 3);
+
+    /* Without the ORBITS lights the ball rolls over C46 and leaves (3.3.7); with them
+       it settles at the far end, on the contact the Z80's release keys on */
+    case stJupPass:
+      if (!iomoon_orbitsLit()) return setState(stFree, 3);
+      return core_getSw(swJup1) ? setState(stJupC45, 3) : setState(stJupC44, 3);
+
+    case stJupC44:
       return iomoon_releaseHeld(ball, sJupRelease);
+
+    /* The second ball rolls down as soon as C44 is free */
+    case stJupC45:
+      ball->custom = 0;
+      return core_getSw(swJup1) ? 0 : setState(stJupC44, 3);
   }
   return 0;
 }
@@ -305,6 +351,7 @@ static sim_tInportData iomoon_inportData[] = {
    clears a SIM_STSWKEEP switch itself, which is why the raise lives here rather
    than in the state table */
 void iomoon_handleMech(int mech) {
+  iomoon_sampleLamps();
   if (core_getSol(sBankReset)) {
     core_setSw(swBankA, FALSE); core_setSw(swBankB, FALSE); core_setSw(swBankC, FALSE);
     core_setSw(swBankD, FALSE); core_setSw(swBankE, FALSE);
@@ -446,3 +493,34 @@ SLEIC_ROMSTART5(iomoont,"v1_3_01t.bin", CRC(42cafcda) SHA1(0ac3dd882748bc86a3b66
 						"v1_3_05.bin",  CRC(6bb5e101) SHA1(125412953bbee7ee171c0bd34f7848fde37ace67))
 SLEIC_ROMEND
 CORE_CLONEDEFNV(iomoont,iomoon,"Io Moon (PRESS START tournament MOD)",1996,"Sleic (Spain)",gl_mSLEIC2,0)
+
+/* Free-play MOD of the tournament set: chip 01 patched so the machine always has a credit
+   standing, and therefore starts a game on every START press with no coin.  Only chip 01
+   changes; 02-05 are the parent's.  The patch is 59 bytes in two regions -- a 54-byte cave
+   at C00DB reached by a five-byte hook planted at D301E.
+
+   main_loop D3002 dispatches on the mode byte [413C:014F] (F11): mode 1 is sub_D303C, the
+   idle state with an empty bank, mode 2 is sub_D307F, the idle state with credits.  The
+   credit test at D809C guards only sub_D8066, which books a game and bumps the games-played
+   audit; a game is BUILT inside sub_D307F, at the mode-3 branch D30CD that starts the music,
+   sets the display up, lights the start lamp, sends Z80 command 0xA9 and calls sub_DC7D7.
+   Mode 1 never reaches it.
+
+   So the hook is on main_loop's mode-1 arm.  Whenever the firmware is about to enter the
+   no-credit idle the cave writes 1 to the F10 credit triple 0x83/0x116/0x20C, sets the cache
+   [413C:00D4] to match, promotes the mode to 2 and returns without calling sub_D303C, so
+   main_loop re-dispatches into sub_D307F.  That one site covers power-on and the end of every
+   game, and every path downstream is stock: attract runs as it does with a coined credit, and
+   START spends the credit through the unmodified D80D1 path.  The cave writes only when the
+   cache reads zero, and only a game start zeroes it, so the store sees one write per game.
+
+   Generated by sleic-iomoon/scripts/io_moon_free_play_patch.py */
+IOMOON_SIM_PORTS(iomoontf)
+INITGAME2(iomoontf, sleic_dispDMD, 3, &iomoonSimData)
+SLEIC_ROMSTART5(iomoontf,"v1_3_01tf.bin", CRC(007ec001) SHA1(15d1ac0a8183ed71d591dd68d689898415e7f349),
+						"v1_3_02.bin",  CRC(2bd589cd) SHA1(87354c76cbef8185d563266230c72a618ce6fcd7),
+						"v1_3_03.bin",  CRC(334d0e20) SHA1(06b38cc7fcee633c45a9000187fcde8d7e03a51f),
+						"v1_3_04.bin",  CRC(f3a950bf) SHA1(e0410f8fe9b4efe7d21052c0a19894a563f90a27),
+						"v1_3_05.bin",  CRC(6bb5e101) SHA1(125412953bbee7ee171c0bd34f7848fde37ace67))
+SLEIC_ROMEND
+CORE_CLONEDEFNV(iomoontf,iomoon,"Io Moon (tournament MOD, free play)",1996,"Sleic (Spain)",gl_mSLEIC2,0)
