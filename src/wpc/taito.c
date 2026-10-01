@@ -386,12 +386,20 @@ MACHINE_DRIVER_END
 // Both bytes sit in the display and command DMA areas this driver defines (dma_display offset
 // 12, dma_commands offset 15). Measured on Vortex: with only the game-over bit applied to a
 // mid-game image the machine booted to attract and Start began a new game at ball 1.
+//
+// 0x40B8 bit 0 is set for the length of the credit-award sequence after a game (Vortex 0x08D2,
+// cleared at 0x0647/0x0EFD) and is tested first thing at reset on both ROM generations: if it is
+// still set, the firmware cold-clears 0x407F-0x40FF -- credits and audits -- as a guard against
+// cutting power mid-payout. A table closed during the match sequence saves it set, which is the
+// "NVram reset" the Pmax65 VBScript patch spins its lamp timer to avoid (vpinball/pinmame#577).
+// Clearing it on load abandons the pending award, which is the same outcome that script had.
 static NVRAM_HANDLER(taito) {
   UINT8 *nv = memory_region(TAITO_MEMREG_CPU)+0x4000;
   core_nvram(file, read_or_write, nv, 0x100, 0x00);
   if (!read_or_write && file) {
-    nv[0x9f] |= 0x01; // game over
-    nv[0x8c]  = 0x00; // ball in play
+    nv[0x9f] |= 0x01;  // game over
+    nv[0x8c]  = 0x00;  // ball in play
+    nv[0xb8] &= ~0x01; // payout in progress -> would cold-clear credits and audits at reset
   }
 }
 
