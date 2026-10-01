@@ -375,8 +375,24 @@ MACHINE_DRIVER_END
 //-----------------------------------------------
 // Load/Save static ram
 //-----------------------------------------------
+// The whole 256-byte window is battery-backed on the real machine, and the firmware's reset
+// path deliberately resumes a game in progress from it (Vortex 0x00CB validates the display
+// scores, ball-in-play < 6, player count < 5 and current player != 0, then carries on). So a
+// table closed at ball 3 came back at ball 3. On load, set the game-over bit -- the one byte the
+// firmware's own reset path writes when it declines to resume (0x010E on the 1981-82 ROMs;
+// Drakor's 0x0FBE writes the same byte) -- and clear ball-in-play, which a live attract reads as
+// 0 and which otherwise lingers on the ball counter. Nothing else is touched: settings, high
+// score, credits and audits are left exactly as saved, and the next Start begins a fresh game.
+// Both bytes sit in the display and command DMA areas this driver defines (dma_display offset
+// 12, dma_commands offset 15). Measured on Vortex: with only the game-over bit applied to a
+// mid-game image the machine booted to attract and Start began a new game at ball 1.
 static NVRAM_HANDLER(taito) {
-  core_nvram(file, read_or_write, memory_region(TAITO_MEMREG_CPU)+0x4000, 0x100, 0x00);
+  UINT8 *nv = memory_region(TAITO_MEMREG_CPU)+0x4000;
+  core_nvram(file, read_or_write, nv, 0x100, 0x00);
+  if (!read_or_write && file) {
+    nv[0x9f] |= 0x01; // game over
+    nv[0x8c]  = 0x00; // ball in play
+  }
 }
 
 static NVRAM_HANDLER(taito_old) {
