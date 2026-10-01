@@ -408,19 +408,16 @@ MACHINE_DRIVER_END
 // cutting power mid-payout. A table closed during the match sequence saves it set, which is the
 // "NVram reset" the Pmax65 VBScript patch spins its lamp timer to avoid (vpinball/pinmame#577).
 // Clearing it on load abandons the pending award, which is the same outcome that script had.
-// The firmware keeps its current sound command in the saved command DMA bytes (offset 2 upper
-// nibble, bits 1-4 plus enable; offset 3 upper nibble, bits 5-8) and re-asserts it after a boot:
-// Shock quit during its match sequence came back playing the match tune, and rewriting that
-// nibble in the saved image silenced it. Priming the driver's latch in MACHINE_INIT was not
-// enough on its own, so the saved nibbles are rewritten here to the value that decodes to
-// command 0 after the DIP bank 1 XOR dma_commands applies -- the one command that is silent on
-// every sound board, because taitos_data_w raises no strobe for it -- which is also what a
-// first boot with no NVRAM presents. The lamp nibbles and everything else are left as saved.
-// core_nvram has restored the DIPs by the time this runs, so core_getDip(1) is the live value.
-static void taito_silenceSavedSndCmd(UINT8 *cmd) {
-  const int dip = core_getDip(1);
-  cmd[2] = (cmd[2] & 0x0f) | ((dip & 0x0f) << 4);
-  cmd[3] = (cmd[3] & 0x0f) | (dip & 0xf0);
+// The firmware keeps its current sound command in the saved command DMA byte at offset 2 (upper
+// nibble) and re-asserts it after a boot: Shock quit during its match sequence came back playing
+// the match tune, and rewriting that nibble in the saved image silenced it. Priming the driver's
+// latch in MACHINE_INIT was not enough on its own. The nibble is reset here to the firmware's own
+// idle, which is not the same on every generation -- measured in attract: 0/1 on the 1980-85
+// boards (Vortex, Drakor, Mr. Black), 8 on the 1979 board (Shock), where bit 7 is an enable the
+// firmware ORs commands into and clearing it silenced every sound. Offset 3's nibble idles at
+// 0, 1, 2 or 3 depending on firmware and is left alone, as are the lamp nibbles.
+static void taito_silenceSavedSndCmd(UINT8 *cmd, UINT8 idle) {
+  cmd[2] = (cmd[2] & 0x0f) | idle;
 }
 
 static NVRAM_HANDLER(taito) {
@@ -430,7 +427,7 @@ static NVRAM_HANDLER(taito) {
     nv[0x9f] |= 0x01;  // game over
     nv[0x8c]  = 0x00;  // ball in play
     nv[0xb8] &= ~0x01; // payout in progress -> would cold-clear credits and audits at reset
-    taito_silenceSavedSndCmd(nv + 0x90);
+    taito_silenceSavedSndCmd(nv + 0x90, 0x00);
   }
 }
 
@@ -445,7 +442,7 @@ static NVRAM_HANDLER(taito_old) {
   if (!read_or_write && file) {
     nv[0x1f] |= 0x01; // game over
     nv[0x0c]  = 0x00; // ball in play
-    taito_silenceSavedSndCmd(nv + 0x10);
+    taito_silenceSavedSndCmd(nv + 0x10, 0x80);
   }
 }
 
