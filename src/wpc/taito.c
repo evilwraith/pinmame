@@ -86,11 +86,25 @@ static INTERRUPT_GEN(taito_irq) {
 
 static void timer_irq(int data) { taito_irq(); }
 
+// The command DMA bytes come back from NVRAM, and the firmware's reset path re-latches them one
+// by one (Vortex 0x0113, Shock 0x0161), each write passing through dma_commands. Left alone,
+// that re-issues whatever sound command was latched at the last power-off: Shock quit during
+// its match sequence replayed the match tune at the next boot. Priming the latch with the
+// command those bytes already encode -- the same expression dma_commands uses -- makes the
+// re-latch a no-op, and the sound board stays quiet until the firmware asks for something new.
+// A first boot with no NVRAM behaved this way already (zero bytes, zero latch, nothing sent).
+static void taito_primeSndCmd(void) {
+	const UINT8 *cmd = TAITOlocals.pCommandsDMA;
+	TAITOlocals.sndCmd = (((cmd[2]>>4) ^ core_getDip(1)) & 0x0f) | ((cmd[3] ^ core_getDip(1)) & 0xf0);
+	TAITOlocals.oldsndCmd = TAITOlocals.sndCmd;
+}
+
 static MACHINE_INIT(taito) {
 	memset(&TAITOlocals, 0, sizeof(TAITOlocals));
 
 	TAITOlocals.pDisplayRAM  = memory_region(TAITO_MEMREG_CPU) + 0x4080;
 	TAITOlocals.pCommandsDMA = memory_region(TAITO_MEMREG_CPU) + 0x4090;
+	taito_primeSndCmd();
 
 	TAITOlocals.timer_irq = timer_alloc(timer_irq);
 	timer_adjust(TAITOlocals.timer_irq, TIME_IN_HZ(TAITO_IRQFREQ), 0, TIME_IN_HZ(TAITO_IRQFREQ));
@@ -105,6 +119,7 @@ static MACHINE_INIT(taito_old) {
 
 	TAITOlocals.pDisplayRAM  = memory_region(TAITO_MEMREG_CPU) + 0x1000;
 	TAITOlocals.pCommandsDMA = memory_region(TAITO_MEMREG_CPU) + 0x1010;
+	taito_primeSndCmd();
 
 	TAITOlocals.timer_irq = timer_alloc(timer_irq);
 	timer_adjust(TAITOlocals.timer_irq, TIME_IN_HZ(5.293/4.0), 0, TIME_IN_HZ(5.293/4.0));
