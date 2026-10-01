@@ -403,8 +403,18 @@ static NVRAM_HANDLER(taito) {
   }
 }
 
+// The 1979 hardware is the same design one page lower: display at 0x1000, command DMA at
+// 0x1010, flags at 0x101F (read by six game-over tests in Shock's main loop and written by both
+// of its reset-validation failure paths, 0x0248 and 0x0260). Its cold-start flag is 0x1038 and
+// that path only clears the display and command area before setting game over, so there is no
+// payout guard to defuse here. Settings live at 0x10F0-0x10F8, the high score at 0x10F9.
 static NVRAM_HANDLER(taito_old) {
-  core_nvram(file, read_or_write, memory_region(TAITO_MEMREG_CPU)+0x1000, 0x100, 0x00);
+  UINT8 *nv = memory_region(TAITO_MEMREG_CPU)+0x1000;
+  core_nvram(file, read_or_write, nv, 0x100, 0x00);
+  if (!read_or_write && file) {
+    nv[0x1f] |= 0x01; // game over
+    nv[0x0c]  = 0x00; // ball in play
+  }
 }
 
 
