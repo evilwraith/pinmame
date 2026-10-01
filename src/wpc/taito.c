@@ -402,12 +402,12 @@ MACHINE_DRIVER_END
 // 12, dma_commands offset 15). Measured on Vortex: with only the game-over bit applied to a
 // mid-game image the machine booted to attract and Start began a new game at ball 1.
 //
-// 0x40B8 bit 0 is set for the length of the credit-award sequence after a game (Vortex 0x08D2,
-// cleared at 0x0647/0x0EFD) and is tested first thing at reset on both ROM generations: if it is
-// still set, the firmware cold-clears 0x407F-0x40FF -- credits and audits -- as a guard against
-// cutting power mid-payout. A table closed during the match sequence saves it set, which is the
-// "NVram reset" the Pmax65 VBScript patch spins its lamp timer to avoid (vpinball/pinmame#577).
-// Clearing it on load abandons the pending award, which is the same outcome that script had.
+// 0x40B8 bit 0 is set while the firmware has the display borrowed -- in the end-of-game sequence
+// (Vortex 0x0EC2) and at the end of the statistics display (0x08D2) -- cleared at 0x0647/0x0EFD,
+// and tested first thing at reset on both ROM generations: if it is still set, the firmware
+// clears 0x407F-0x40FF, which is credits and audits. A table closed during the match sequence
+// saves it set, which is the "NVram reset" the Pmax65 VBScript patch spins its lamp timer to
+// avoid (vpinball/pinmame#577).
 // The firmware keeps its current sound command in the saved command DMA byte at offset 2 (upper
 // nibble) and re-asserts it after a boot: Shock quit during its match sequence came back playing
 // the match tune, and rewriting that nibble in the saved image silenced it. Priming the driver's
@@ -426,7 +426,7 @@ static NVRAM_HANDLER(taito) {
   if (!read_or_write && file) {
     nv[0x9f] |= 0x01;  // game over
     nv[0x8c]  = 0x00;  // ball in play
-    nv[0xb8] &= ~0x01; // payout in progress -> would cold-clear credits and audits at reset
+    nv[0xb8] &= ~0x01; // display borrowed -> the firmware would clear credits and audits at reset
     taito_silenceSavedSndCmd(nv + 0x90, 0x00);
   }
 }
