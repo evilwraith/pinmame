@@ -69,12 +69,14 @@
     COREPORT_BITDEF(  0x0200, IPT_COIN1,  IP_KEY_DEFAULT) /* COIN  -> swMatrix[9].5 (key 5); on Io Moon one press = one coin = a pulse train */ \
     COREPORT_BITDEF(  0x0400, IPT_TILT,   IP_KEY_DEFAULT) /* TILT  -> swMatrix[9].0 (key T) */ \
     COREPORT_BIT(     0x0800, "Test / Service Menu", KEYCODE_7) /* -> swMatrix[9].1; service-menu enter: Bike Race C4 Test code 0x33, Io Moon code 0x3F (F14) */ \
-    /* Lifts the ball off the trough optos while held, so the ball-missing path can be \
-     * exercised without letting go of the matrix test keys.  Inert unless "Balls" > 0, \
-     * and inert on Sleic Pin-Ball, which has no trough model yet (see SWITCH_UPDATE(SLEIC1)). \
-     * Same key as Io Moon's drain, which is the opposite polarity on that machine: there \
-     * the trough contacts mean "ball home" and the key RETURNS one, here they gate the \
-     * ball-present check and the key TAKES one away */ \
+    /* One key, opposite polarities.  On Bike Race it lifts the ball off the trough \
+     * optos while held, exercising the ball-missing path without letting go of the \
+     * matrix test keys: those contacts gate a ball-present check, so the key TAKES a \
+     * ball away (sleic3_ball_update).  On Io Moon and Sleic Pin-Ball the trough \
+     * contacts mean "ball home" instead, so the same key RETURNS one (Io Moon's \
+     * drain; Sleic Pin-Ball's C29 Salida Bolas, sleic1_ball_update).  Inert on Bike \
+     * Race and Sleic Pin-Ball unless "Balls" > 0, and on Io Moon whenever its \
+     * simulator is registered, which is always in a standalone build */ \
     COREPORT_BIT(     0x1000, "Ball out of trough (needs Balls>0)", KEYCODE_BACKSPACE)
 
 /*-- Common Inports for SLEIC games whose DIP block has not been traced --*/
@@ -142,8 +144,15 @@
  *
  * The FUNCTIONS are the Io Moon service manual's, section 7.2.2.3: SW1 VDB solenoid
  * watchdog, SW2-SW4 country code, SW5 "no balls dispensed", SW6 solenoid test, SW7 lamp
- * test, SW8 board self-test.  Only SW2-SW4 is wired here, and only it is established
- * from the ROM -- the manual gives no bit numbers.  Z80 command 0xF9 -> handler 2D9D
+ * test, SW8 board self-test.  SW2-SW4 and SW6 are wired here and both are established
+ * from the ROM -- the manual gives no bit numbers.
+ *
+ * SW6, not SW5, is the "no balls dispensed" service position.  The block is wired
+ * switch n -> port-0x04 bit n-1, fixed by SW2-SW4 on bits 1-3, and the 0xED handler 2BEB
+ * reads bit 5 (IN ($04) / BIT 5 / JP Z,2C17) -- switch 6.  No bit above the country field
+ * other than 5 is read anywhere in the Z80 ROM, so SW5 is unmodelled here.
+ *
+ * Z80 command 0xF9 -> handler 2D9D
  * reads port 0x04 and sends the low nibble back as 0xF0|nibble; the 80188 turns bits 1-3
  * of it into a country number 0..7 (D5CA3-D5CC2, seven-way table at D5D01).
  *
@@ -235,12 +244,12 @@
       COREPORT_DIPSET(0x000a, "Spain (Spanish text)" ) \
       COREPORT_DIPSET(0x000c, "Belgium (ROM coins differ)" ) \
       COREPORT_DIPSET(0x000e, "Portugal" ) \
-    COREPORT_DIPNAME( 0x0010, 0x0010, "SW40-5 Service: no balls dispensed") \
-      COREPORT_DIPSET(0x0000, "On (0xED answers at once, no ball check)" ) \
-      COREPORT_DIPSET(0x0010, "Off (normal play)" ) \
-    COREPORT_DIPNAME( 0x0020, 0x0000, "SW40-6 solenoid test (not modelled)") \
-      COREPORT_DIPSET(0x0020, DEF_STR( Off ) ) \
+    COREPORT_DIPNAME( 0x0010, 0x0010, "SW40-5 (not modelled; the ROM reads no such bit)") \
+      COREPORT_DIPSET(0x0010, DEF_STR( Off ) ) \
       COREPORT_DIPSET(0x0000, DEF_STR( On ) ) \
+    COREPORT_DIPNAME( 0x0020, 0x0020, "SW40-6 Service: no balls dispensed") \
+      COREPORT_DIPSET(0x0020, "Off (normal play)" ) \
+      COREPORT_DIPSET(0x0000, "On (0xED answers at once, no ball check)" ) \
     COREPORT_DIPNAME( 0x0040, 0x0000, "SW40-7 lamp test (not modelled)") \
       COREPORT_DIPSET(0x0040, DEF_STR( Off ) ) \
       COREPORT_DIPSET(0x0000, DEF_STR( On ) ) \

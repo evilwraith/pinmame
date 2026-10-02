@@ -510,6 +510,7 @@ DRIVER(trek,120)        //               01/92 Star Trek 25th Anniversary (1.20)
 DRIVER(trek,200)        //               04/92 Star Trek 25th Anniversary (2.00)
 DRIVER(trek,201)        //               04/92 Star Trek 25th Anniversary (2.01)
 DRIVER(trek,300)        //               04/20 Star Trek 25th Anniversary (3.00 unofficial MOD)
+DRIVER(trek,301)        //               09/26 Star Trek 25th Anniversary (3.01 unofficial MOD)
 DRIVER(hook,401p)       //Data East MPU: 11/91 Hook (4.01 with Prototype Sound)
 DRIVER(hook,400)        //               01/92 Hook (4.01, Display 4.00)
 DRIVER(hook,f401)       //               01/92 Hook (4.01, French Display 4.01)
@@ -1023,6 +1024,8 @@ DRIVERNV(r_hotcold)     //Hot & Cold (1978)
 DRIVERNV(r_swash)       //Swash Buckler (1979)
 DRIVERNV(r_cavalier)    //Cavalier (1979)
 DRIVERNV(r_quijote)     //Don Quijote (1979)
+DRIVERNV(r_torneo)      //Torneo (1978)
+DRIVERNV(r_torneoa)     //Torneo (corrected dump, 3 balls)
 DRIVERNV(r_crzyrace)    //Crazy Race (1978)
 DRIVERNV(r_flipper)     //The Flipper Game (1980)
 DRIVERNV(r_blackmag)    //Black Magic (1980)
@@ -1406,10 +1409,13 @@ DRIVER  (harl,l13)      //           10/99 Harley-Davidson (Sega, 1.03 Spanish)
 DRIVERNV(bikerace)      // 1992 - Bike Race
 DRIVERNV(bikerac2)      // 1992 - Bike Race (2-ball play)
 DRIVERNV(bikerac3)      // 1992 - Bike Race (V4.1)
+DRIVERNV(bikerc3f)      // 1992 - Bike Race (V4.1, press start MOD, free play)
 DRIVERNV(sleicpin)      // 1993 - Sleic Pin-Ball
+DRIVERNV(sleicpnf)      // 1993 - Sleic Pin-Ball (end-of-game scores MOD, free play)
 DRIVERNV(iomoon)        // 1994 - Io Moon
 DRIVERNV(iomoona)       // 1994 - Io Moon (earlier ROM revision)
 DRIVERNV(iomoont)       // 1994 - Io Moon (PRESS START tournament MOD)
+DRIVERNV(iomoontf)      // 1994 - Io Moon (tournament MOD, free play)
                         // 1996 - Dona Elvira 2
 
 // ----------------
