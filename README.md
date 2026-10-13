@@ -5,7 +5,7 @@
 ## What is it?
 
 PinMAME emulates the hardware found in almost every solid state pinball machine created from
-the earliest days of CPU-controlled machines (mid 1970's) through 2014 (Stern SAM),
+the earliest days of CPU-controlled machines (mid 1970's) through 2014 / 2017 (Stern SAM / PinHeck),
 with around 770 emulated unique Pinball machines and many more clones/revisions (overall more than 2700 sets).
 In addition to official revisions, PinMAME also allows for homebrew modifications, similar in spirit to HBMAME
 (these are all marked as 'MOD' in the naming).
@@ -33,7 +33,7 @@ Nuova Bell, Inder, Juegos Populares, LTD, Peyper, Sonic, Allied Leisure, Fascina
 Sleic, Playmatic, NSM, Grand Products, Jac van Ham, Videodens, Astro, Micropin,
 Christian Tabart, Jeutel, Valley Manufacturing, MAC / CICPlay, Stargame, Barni,
 Seeben/Sirmo, Splin Bingo, Playbar, Cirsa, Nondum / CIFA, Maibesa, ManilaMatic, Joctronic, Mirco,
-Sport Matic, Regama, Recel, Interflip, Recreativos Franco, Illinois Pinball.
+Sport Matic, Regama, Recel, Interflip, Recreativos Franco, Illinois Pinball, Spooky Pinball PinHeck.
 
 *Note: Emulation is not 100% working and correct for all hardware, but very close for the vast majority.*
 
@@ -47,7 +47,7 @@ record/playback, command line switches etc.).
 
 In addition to the built-in debugger, it also includes an **Advanced Remote Debugger** module, providing a thread-safe REST API and a high-fidelity web dashboard for headless or remote analysis.
 Features include real-time DMD/Alphanumeric rendering, hardware breakpoints, memory pattern search, and interactive matrix visualization. See the [README](src/remote_debug/README.md) for full documentation and API reference.
-For the moment, it's mostly useful for debugging WPC/6809-based machines, but is applicable to all machines.
+For the moment, it's mostly useful for debugging WPC/Sys11/6809-based machines, but is applicable to all machines.
 
 In addition, there is special compile time support for the [P-ROC](http://www.pinballcontrollers.com),
 to drive (at least) real WPC machines with PinMAME/P-ROC, [PPUC](https://github.com/PPUC) and LISY
@@ -65,6 +65,8 @@ Before you start to add the ROMs from your favorite pinball machine please note:
 and listen to/record the pinball game sounds with the pure PinMAME package itself.
 
 ## Games supported (incomplete)
+
+See [SUPPORTED_MACHINES.md](SUPPORTED_MACHINES.md) for a more complete, machine-by-machine list.
 
 - *Midway Pinball 2000* - All games from Revenge From Mars (1999) to Star Wars Episode I (1999)
 - *Williams/Bally WPC* - All games from Dr. Dude (1990) to Cactus Canyon (1998)
@@ -137,6 +139,7 @@ and listen to/record the pinball game sounds with the pure PinMAME package itsel
 - *Mirco*
 - *Sport Matic*
 - *Regama* - Trebol
+- *Spooky Pinball (PinHeck)* - America's Most Haunted (2014), Domino's Spectacular Pinball Adventure (2016), Rob Zombie's Spookshow International (2016), The Jetsons (2017)
 - **Prototype games and modifications**
   - Dave Nutting's Flicker (Sep 1974)
   - Bally's Bow & Arrow (Jan 1976)
@@ -198,3 +201,4 @@ Start PinMAME in headless mode with the debugger active:
 # Note from the PinMAME Development team
 
 We're working hard to improve this great emulator, and welcome your feedback!! Please do not hesitate to contact us with questions, bug reports, suggestions, code patches, whatever!
+NOTE that we will not accept any recent pinball machine emulation code, so please make sure that what you're contributing has been out of production for many years!

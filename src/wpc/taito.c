@@ -86,13 +86,8 @@ static INTERRUPT_GEN(taito_irq) {
 
 static void timer_irq(int data) { taito_irq(); }
 
-// The command DMA bytes come back from NVRAM, and the firmware's reset path re-latches them one
-// by one (Vortex 0x0113, Shock 0x0161), each write passing through dma_commands. Left alone,
-// that re-issues whatever sound command was latched at the last power-off: Shock quit during
-// its match sequence replayed the match tune at the next boot. Priming the latch with the
-// command those bytes already encode -- the same expression dma_commands uses -- makes the
-// re-latch a no-op, and the sound board stays quiet until the firmware asks for something new.
-// A first boot with no NVRAM behaved this way already (zero bytes, zero latch, nothing sent).
+// Prime the sound latch with the command the loaded DMA bytes already encode (same expression
+// as dma_commands), so the firmware's reset re-latch of the command area sends nothing.
 static void taito_primeSndCmd(void) {
 	const UINT8 *cmd = TAITOlocals.pCommandsDMA;
 	TAITOlocals.sndCmd = (((cmd[2]>>4) ^ core_getDip(1)) & 0x0f) | ((cmd[3] ^ core_getDip(1)) & 0xf0);
@@ -390,52 +385,42 @@ MACHINE_DRIVER_END
 //-----------------------------------------------
 // Load/Save static ram
 //-----------------------------------------------
-// The whole 256-byte window is battery-backed on the real machine, and the firmware's reset
-// path deliberately resumes a game in progress from it (Vortex 0x00CB validates the display
-// scores, ball-in-play < 6, player count < 5 and current player != 0, then carries on). So a
-// table closed at ball 3 came back at ball 3. On load, set the game-over bit -- the one byte the
-// firmware's own reset path writes when it declines to resume (0x010E on the 1981-82 ROMs;
-// Drakor's 0x0FBE writes the same byte) -- and clear ball-in-play, which a live attract reads as
-// 0 and which otherwise lingers on the ball counter. Nothing else is touched: settings, high
-// score, credits and audits are left exactly as saved, and the next Start begins a fresh game.
-// Both bytes sit in the display and command DMA areas this driver defines (dma_display offset
-// 12, dma_commands offset 15). Measured on Vortex: with only the game-over bit applied to a
-// mid-game image the machine booted to attract and Start began a new game at ball 1.
-//
-// 0x40B8 bit 0 is set while the firmware has the display borrowed -- in the end-of-game sequence
-// (Vortex 0x0EC2) and at the end of the statistics display (0x08D2) -- cleared at 0x0647/0x0EFD,
-// and tested first thing at reset on both ROM generations: if it is still set, the firmware
-// clears 0x407F-0x40FF, which is credits and audits. A table closed during the match sequence
-// saves it set, which is the "NVram reset" the Pmax65 VBScript patch spins its lamp timer to
-// avoid (vpinball/pinmame#577).
-// The firmware keeps its current sound command in the saved command DMA byte at offset 2 (upper
-// nibble) and re-asserts it after a boot: Shock quit during its match sequence came back playing
-// the match tune, and rewriting that nibble in the saved image silenced it. Priming the driver's
-// latch in MACHINE_INIT was not enough on its own. The nibble is reset here to the firmware's own
-// idle, which is not the same on every generation -- measured in attract: 0/1 on the 1980-85
-// boards (Vortex, Drakor, Mr. Black), 8 on the 1979 board (Shock), where bit 7 is an enable the
-// firmware ORs commands into and clearing it silenced every sound. Offset 3's nibble idles at
-// 0, 1, 2 or 3 depending on firmware and is left alone, as are the lamp nibbles.
+// Reset the saved sound command (offset 2, upper nibble) to the firmware's own idle, because the
+// firmware re-asserts it after boot: Shock closed during its match sequence came back playing the
+// match tune. The idle differs by generation (measured in attract): 0 on the 1980-85 boards, 8 on
+// the 1979 board, where bit 7 is an enable the firmware ORs commands into. Offset 3 and the lamp
+// nibbles are left alone.
 static void taito_silenceSavedSndCmd(UINT8 *cmd, UINT8 idle) {
   cmd[2] = (cmd[2] & 0x0f) | idle;
 }
 
+// The whole CMOS window is saved and the firmware deliberately resumes a game in progress from
+// it at reset (power-loss recovery), so a table closed at ball 3 came back at ball 3. On load:
+//  - set the game-over bit, the byte the firmware's own reset path writes when it declines to
+//    resume (0x010E on the 1981-82 ROMs, 0x0FBE on the 1980 ones). The resume check itself
+//    differs by generation (Drakor clamps a bad ball count and resumes), the flag does not;
+//  - clear ball-in-play, which a live attract reads as 0;
+//  - clear 0x40B8 bit 0: set while message text borrows the score display 0x4080-0x408B (end of
+//    game, statistics) and tested first at reset, where it clears credits and audits (0x407F-0x40FF
+//    on the 1981-85 ROMs, plus 0x4000-0x404F on Drakor, Meteor, Fire Action; 0x4080-0x4093 on
+//    Oba-Oba). The "NVram reset" the Pmax65 VBScript patch spins its lamp timer to avoid (#577);
+//  - if that bit was set, blank the score display (0xFF digits): the text would fail the reset's
+//    digit check (which clears 0x407F-0x4093 on Oba-Oba) or show up as score digits
+// Settings, high score, credits and audits are otherwise loaded exactly as saved.
 static NVRAM_HANDLER(taito) {
   UINT8 *nv = memory_region(TAITO_MEMREG_CPU)+0x4000;
   core_nvram(file, read_or_write, nv, 0x100, 0x00);
   if (!read_or_write && file) {
     nv[0x9f] |= 0x01;  // game over
     nv[0x8c]  = 0x00;  // ball in play
+    if (nv[0xb8] & 0x01) memset(nv + 0x80, 0xFF, 12); // display borrowed: blank the message text
     nv[0xb8] &= ~0x01; // display borrowed -> the firmware would clear credits and audits at reset
     taito_silenceSavedSndCmd(nv + 0x90, 0x00);
   }
 }
 
-// The 1979 hardware is the same design one page lower: display at 0x1000, command DMA at
-// 0x1010, flags at 0x101F (read by six game-over tests in Shock's main loop and written by both
-// of its reset-validation failure paths, 0x0248 and 0x0260). Its cold-start flag is 0x1038 and
-// that path only clears the display and command area before setting game over, so there is no
-// payout guard to defuse here. Settings live at 0x10F0-0x10F8, the high score at 0x10F9.
+// 1979 hardware: same layout one page lower (display 0x1000, flags 0x101F). Its cold-start
+// path clears only the display area, so there is no payout guard to defuse.
 static NVRAM_HANDLER(taito_old) {
   UINT8 *nv = memory_region(TAITO_MEMREG_CPU)+0x1000;
   core_nvram(file, read_or_write, nv, 0x100, 0x00);

@@ -707,7 +707,7 @@ MACHINE_DRIVER_START(p2k)
 	MDRV_SWITCH_UPDATE(p2k)
 	MDRV_SWITCH_CONV(p2k_sw2m, p2k_m2sw)
 	MDRV_NVRAM_HANDLER(p2k)
-	MDRV_CPU_ADD_TAG("mcpu", MEDIAGX, 233000000/3) //!! sync with p2k_pinmame.cpp
+	MDRV_CPU_ADD_TAG("mcpu", MEDIAGX, 233000000/3) //!! sync with p2k_pinmame.cpp (233/5 would fix SWE1's missing intro scroll speech, see there)
 	MDRV_CPU_MEMORY(p2k_readmem, p2k_writemem)
 	/* Once per frame, and it does not interrupt the CPU - MEDIAGX has no vblank line wired here.
 	   It is a scheduler callback, which is exactly what wpc.c and se.c use theirs for */
@@ -725,12 +725,12 @@ MACHINE_DRIVER_END
    coin door's diagnostic buttons - so they are carried in PinMAME's dedicated columns 10, 11 and a
    twelfth column for the diagnostics, and p2k_switch_update() below fills them.
 
-   Bit assignments are MAME's (src/mame/drivers/pinball2k.cpp, its keyboard handler). Keys are
-   7/8/9/0 = Enter/Down/Up/Escape, with END toggling the coin door. Note that the bit-to-function
-   mapping is NOT the one wpc.h's labels suggest: wpc.h calls 0x20/0x40 Up/Down, but the switches
-   those bits reach on WPC are Down/Up (WPC.vbs swDown = 6, swUp = 7), and Down/Up is what P2K
-   expects from 8/9. p2k.vbs is kept in step with this. The board's own coin door bit reads "closed" when set -
-    the machine reports COINDOOR IS OPEN with the bit clear, which is the state it powers up */
+   Bit assignments are MAME's (src/mame/drivers/pinball2k.cpp, its keyboard handler), but the keys
+   follow PinMAME's coin door convention (wpc.h, VPMKeys.vbs) rather than MAME's 7 = Enter / 0 = Escape:
+   7/8/9/0 = Escape/Down/Up/Enter, with END toggling the coin door. 8/9 are Down/Up as on WPC (wpc.h,
+   WPC.vbs swDown = 6, swUp = 7), which is what P2K expects from them. p2k.vbs is kept in step with this.
+   The board's own coin door bit reads "closed" when set - the machine reports COINDOOR IS OPEN with the
+   bit clear, which is the state it powers up */
 INPUT_PORTS_START(rfm)
 	CORE_PORTS
 	/* SIM_PORTS(1) - PinMAME's built-in ball simulator, commented out rather than removed so it is
@@ -747,10 +747,10 @@ INPUT_PORTS_START(rfm)
 		COREPORT_BITDEF(  0x0002, IPT_COIN2,        IP_KEY_DEFAULT)
 		COREPORT_BITDEF(  0x0004, IPT_COIN3,        KEYCODE_3)
 		COREPORT_BITDEF(  0x0008, IPT_COIN4,        KEYCODE_4)
-		COREPORT_BIT(     0x0010, "Enter",          KEYCODE_7)
+		COREPORT_BIT(     0x0010, "Escape",         KEYCODE_7)
 		COREPORT_BIT(     0x0020, "Down",           KEYCODE_8)
 		COREPORT_BIT(     0x0040, "Up",             KEYCODE_9)
-		COREPORT_BIT(     0x0080, "Escape",         KEYCODE_0)
+		COREPORT_BIT(     0x0080, "Enter",          KEYCODE_0)
 		COREPORT_BITTOG(  0x0100, "Coin Door",      KEYCODE_END)
 		COREPORT_BITDEF(  0x0200, IPT_START1,       IP_KEY_DEFAULT)
 		COREPORT_BIT(     0x0400, "Plumb Tilt",     KEYCODE_INSERT)
@@ -903,12 +903,12 @@ static SWITCH_UPDATE(p2k) {
 			((in   & 0x2000) ? P2K_CAB_RACTION   : 0) |
 			((in   & 0x1000) ? P2K_CAB_LACTION   : 0);
 
-		/* Keys 7/8/9/0 are Enter/Down/Up/Escape, matching p2k.vbs - see the note above the port */
+		/* Keys 7/8/9/0 are Escape/Down/Up/Enter, matching p2k.vbs - see the note above the port */
 		coreGlobals.swMatrix[10] =
-			((in   & 0x0080) ? P2K_DIAG_ESCAPE   : 0) |
+			((in   & 0x0010) ? P2K_DIAG_ESCAPE   : 0) |
 			((in   & 0x0040) ? P2K_DIAG_UP       : 0) |
 			((in   & 0x0020) ? P2K_DIAG_DOWN     : 0) |
-			((in   & 0x0010) ? P2K_DIAG_ENTER    : 0);
+			((in   & 0x0080) ? P2K_DIAG_ENTER    : 0);
 
 		core_setSw(swStartButton, in & 0x0200);
 		core_setSw(swLaunchButton, (in & 0x4000) ? 1 : 0);
@@ -1811,11 +1811,9 @@ ROM_END
    header stores major and minor separately and "Software version: %d.%d" prints the minor as a
    plain number - the same reason rfm_010 displays 0.1.
 
-   Power up with the coin door open and these six print "DCS2 board SRAM test failed" and lose
-   sound for that boot. Nothing to do with this flash - the stock one does it too - and nothing to
-   do with being prototypes: it is every set on XINA 1.12 and older and only those, rfm_010,
-   rfm_080, rfm_120 and swep1_040 included. Written up under "Old sets lose sound if the coin door
-   is open" in src/p2k/README.md; none of the ten needs a sound flag for it.
+   Powered up with the coin door open these six, like every set on XINA 1.12 and older, used to print
+   "DCS2 board SRAM test failed" and lose sound for that boot - an emulation fault, the sound board
+   reporting itself always ready, since fixed in wmssnd.c. Written up in src/p2k/PAST_FAILURES.md.
 
    The revision history in the same archive covers 0.5 (07/03/99, "Release for Waukegan startup"),
    0.6 (16/03/99, "Release for samples", XINA 1.01), 0.7 (26/03/99, XINA 1.02), 0.8 (30/03/99,

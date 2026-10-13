@@ -13,7 +13,7 @@ Latest Info
 What is it?
 -----------
   PinMAME emulates the hardware found in almost every solid state pinball machine created from
-  the earliest days of CPU-controlled machines (mid 1970's) through 2014 (Stern SAM),
+  the earliest days of CPU-controlled machines (mid 1970's) through 2014 / 2017 (Stern SAM / PinHeck),
   with around 770 emulated unique Pinball machines and many more clones/revisions (overall more than 2700 sets).
   In addition to official revisions, PinMAME also allows for homebrew modifications, similar in spirit to HBMAME
   (these are all marked as 'MOD' in the naming).
@@ -38,7 +38,7 @@ What is it?
   Sleic, Playmatic, NSM, Grand Products, Jac van Ham, Videodens, Astro, Micropin,
   Christian Tabart, Jeutel, Valley Manufacturing, MAC / CICPlay, Stargame, Barni,
   Seeben/Sirmo, Splin Bingo, Playbar, Cirsa, Nondum / CIFA, Maibesa, ManilaMatic, Joctronic, Mirco,
-  Sport Matic, Regama, Recel, Interflip, Recreativos Franco, Illinois Pinball.
+  Sport Matic, Regama, Recel, Interflip, Recreativos Franco, Illinois Pinball, Spooky Pinball PinHeck.
 
   *Note: Emulation is not 100% working and correct for all hardware, but very close for the vast majority.
 
@@ -147,6 +147,7 @@ Games supported (incomplete) (a bit outdated, at least since version 2.1 :/ )
   Mirco:
   Sport Matic:
   Regama: Trebol
+  Spooky Pinball (PinHeck): America's Most Haunted (2014), Domino's Spectacular Pinball Adventure (2016), Rob Zombie's Spookshow International (2016), The Jetsons (2017)
   Prototype games and modifications:
     Dave Nutting's Flicker (Sep 1974),
     Bally's Bow & Arrow (Jan 1976),
@@ -270,6 +271,35 @@ PinMAME Specific Command line switches
                          the WPC serial port of the Printer Kit or WPC95 AV board)
   -sound_mode 0-3       (Sound processing mode; 0=PinMAME, 1=Alternative, 2=PinSound,
                          3=PinSound + Recordings)
+
+Headless and scripted runs
+--------------------------
+  For unattended, reproducible runs, e.g. capturing a game's DMD output, or automated testing.
+  Also settable in an ini file; the command line wins.
+
+  -[no]headless         (Unix only: run without a display)
+  -[no]skip_gamewarnings
+                        (Skip the game warnings screen; needed to run a game
+                         marked as not working headless)
+  -frames_to_run n      (-ftr: end the run after n frames)
+  -key_script <file>    (Scripted key presses, one per line, '#' comments:
+                           <frame> down <KEY>[,<KEY>...]   hold from this frame
+                           <frame> up   <KEY>[,<KEY>...]   release
+                           <frame> tap  <n> <KEY>[,...]    hold for n frames
+                           <frame> mark <text>             log to <file>.marks
+                           <frame> quit                    end the run
+                         <KEY> is a MAME key name, e.g. KEYCODE_5. Mistakes go
+                         to stderr. Details in src/keyscript.h)
+  -dmd_dump_dir <dir>   (Write every DMD frame to <dir>/<game>.txt, plus .raw
+                         for GTS3, WPC and Alvin G.; each run starts afresh)
+  -dip "<name>=<value>" (Set a DIP switch, repeatable: -dip "Country=Germany".
+                         Case-insensitive; the value may be a number (0x20).
+                         Pick one of several same-named switches as "<name>#<n>".
+                         A wrong name or value lists the valid ones and aborts.
+                         Saved to the game's cfg, like a change in the TAB menu)
+  -rtc "YYYY-MM-DD HH:MM[:SS]"
+                        (Start the emulated real-time clock here instead of at
+                         the host's time; it advances with emulated time)
 
 VGM sound file dump
 -------------------
@@ -487,3 +517,5 @@ Note from the PinMAME Development team
 We're working hard to improve this great emulator, and welcome your feedback!!
 Please do not hesitate to contact us with questions, bug reports, suggestions,
 code patches, whatever!
+NOTE that we will not accept any recent pinball machine emulation code, so please
+make sure that what you're contributing has been out of production for many years!

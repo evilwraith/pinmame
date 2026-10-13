@@ -4,11 +4,14 @@
 
 #include "../../ext/libsamplerate/samplerate.h"
 
+#include <atomic>
+#include <shared_mutex>
 #include <thread>
 #include <vector>
 #include <algorithm>
 #include <format>
 #include <atomic>
+#include <map>
 
 #if (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64) || defined(__ia64__) || defined(__x86_64__)
  #define SSE_DISPLAY_OPT
@@ -20,7 +23,8 @@
  #pragma message ( "Warning: No SSE optimizations for Display enabled" )
 #endif
 
-#if defined(_WIN32) || defined(_WIN64)
+// MinGW has strcasecmp: renaming it there makes <string.h>'s inline wrapper call itself
+#if (defined(_WIN32) || defined(_WIN64)) && !defined(__MINGW32__)
 #define strcasecmp _stricmp
 #endif
 
@@ -48,8 +52,13 @@ PINMAME_DMD_MODE g_fDmdMode = PINMAME_DMD_MODE_BRIGHTNESS;
 char g_szGameName[256] = {}; // String containing requested game name (may be different from ROM if aliased), set by PinmameRun
 }
 
-static std::atomic_int _isRunning { 0 };
-static std::atomic_int _timeToQuit { 0 };
+// Run state: 0 stopped, 2 starting (PinmameRun), 1 running (end of the core's machine init), 3 stopping (start of its
+// machine stop). The API only touches the emulation in state 1, under a shared lock of _stateMutex: the game thread
+// takes it exclusively to change the state, so it can't leave state 1 (and tear down) while an API call is in flight
+static std::atomic<int> _isRunning = 0;
+static std::shared_mutex _stateMutex;
+static inline bool IsEmulationRunning() { return _isRunning == 1; }
+static std::atomic<int> _timeToQuit = 0; // written by PinmameStop on the host thread, polled by the game thread
 static PinmameConfig* _p_Config = nullptr;
 static std::thread* _p_gameThread = nullptr;
 static void* _p_userData = nullptr;
@@ -65,6 +74,22 @@ static float _audioData[PINMAME_ACCUMULATOR_SAMPLES * 2];
 static int _nvramInit = 0;
 static uint8_t _nvram[CORE_MAXNVRAM];
 static PinmameNVRAMState _nvramState[CORE_MAXNVRAM];
+
+// The file types PinmameSetPath() can override, indexed by PINMAME_FILE_TYPE, with the folder each one defaults to
+// below PinmameConfig::vpmPath. An override replaces that default and outlives later PinmameSetConfig() calls
+static const struct {
+	int fileType;
+	const char* defaultFolder;
+} _pathTypes[] = {
+	{ FILETYPE_ROM, "roms" },
+	{ FILETYPE_NVRAM, "nvram" },
+	{ FILETYPE_SAMPLE, "samples" },
+	{ FILETYPE_CONFIG, "cfg" },
+	{ FILETYPE_HIGHSCORE, "hi" },
+};
+static constexpr int PINMAME_FILE_TYPE_COUNT = sizeof(_pathTypes) / sizeof(_pathTypes[0]);
+static_assert(PINMAME_FILE_TYPE_COUNT == PINMAME_FILE_TYPE_HIGHSCORE + 1, "_pathTypes must cover every PINMAME_FILE_TYPE");
+static char* _pathOverrides[PINMAME_FILE_TYPE_COUNT] = {};
 
 typedef struct {
 	PinmameDisplayLayout layout;
@@ -281,6 +306,10 @@ static struct MsgLocals
    };
    char memMapStringBuffer[256];
    std::vector<MemMapState> memMapStates;
+
+   // I/O names gathered from a machine definition provided through PinmameSetGameDef,
+   // keyed by state group id (PMPI_GROUP_SOLENOID/GI/LAMP/SWITCH/DIPSWITCH) and mappingId
+   std::map<std::pair<uint32_t, uint32_t>, std::string> gameDefStates;
 } msgLocals = {};
 
 
@@ -297,6 +326,30 @@ static char* ComposePath(const char* const path, const char* const file)
 	strcpy(newPath, path);
 	strcpy(newPath + pathLength, file);
 	return newPath;
+}
+
+/******************************************************
+ * CopyPath
+ ******************************************************/
+
+static char* CopyPath(const char* const path)
+{
+	char* const newPath = (char*)malloc(strlen(path) + 1);
+	strcpy(newPath, path);
+	return newPath;
+}
+
+/******************************************************
+ * ApplyPath
+ ******************************************************/
+
+static void ApplyPath(const PINMAME_FILE_TYPE fileType)
+{
+	// setPath() takes ownership of the string
+	if (_pathOverrides[fileType])
+		setPath(_pathTypes[fileType].fileType, CopyPath(_pathOverrides[fileType]));
+	else
+		setPath(_pathTypes[fileType].fileType, ComposePath(_p_Config ? _p_Config->vpmPath : "", _pathTypes[fileType].defaultFolder));
 }
 
 static char* TrimAliasToken(char* token)
@@ -851,7 +904,11 @@ extern "C" void OnStateChange(const int state)
    if (_isRunning == state)
       return;
 
-   _isRunning = state;
+   {
+      // Not held for the callbacks below: they may call the API, or wait for the main thread
+      const std::unique_lock lock(_stateMutex);
+      _isRunning = state;
+   }
 
    if (msgLocals.msgApi != NULL)
    {
@@ -930,7 +987,7 @@ extern "C" void OnStateChange(const int state)
 			else if ((layout->type & CORE_SEGMASK) == CORE_DMD) {
 				pDisplay->layout.width = layout->length;
 				pDisplay->layout.height = layout->start;
-				const int shade_16_enabled = (core_gameData->gen & (GEN_SAM | GEN_SPA | GEN_ALVG | GEN_ALVG_DMD2 | GEN_GTS3)) != 0;
+				const int shade_16_enabled = (core_gameData->gen & (GEN_SAM | GEN_SPA | GEN_ALVG | GEN_ALVG_DMD2 | GEN_GTS3 | GEN_PINHECK)) != 0; // pinHeck: the raw DMD's 16 levels
 				pDisplay->layout.depth = shade_16_enabled ? 4 : 2;
 				pDisplay->size = pDisplay->layout.width * pDisplay->layout.height;
 			}
@@ -1158,11 +1215,9 @@ PINMAMEAPI void PinmameSetConfig(const PinmameConfig* const p_config)
 	// 1 = default address range). Only effective in builds that compile a JIT in
 	options.at91jit = 1;
 
-	setPath(FILETYPE_ROM, ComposePath(_p_Config->vpmPath, "roms"));
-	setPath(FILETYPE_NVRAM, ComposePath(_p_Config->vpmPath, "nvram"));
-	setPath(FILETYPE_SAMPLE, ComposePath(_p_Config->vpmPath, "samples"));
-	setPath(FILETYPE_CONFIG, ComposePath(_p_Config->vpmPath, "cfg"));
-	setPath(FILETYPE_HIGHSCORE, ComposePath(_p_Config->vpmPath, "hi"));
+	// keeps the paths set with PinmameSetPath()
+	for (int fileType = 0; fileType < PINMAME_FILE_TYPE_COUNT; fileType++)
+		ApplyPath((PINMAME_FILE_TYPE)fileType);
 	setPath(FILETYPE_INPUTLOG, ComposePath(_p_Config->vpmPath, "inp"));
 	setPath(FILETYPE_MEMCARD, ComposePath(_p_Config->vpmPath, "memcard"));
 	setPath(FILETYPE_STATE, ComposePath(_p_Config->vpmPath, "sta"));
@@ -1176,34 +1231,39 @@ PINMAMEAPI void PinmameSetConfig(const PinmameConfig* const p_config)
  * PinmameSetPath
  ******************************************************/
 
-PINMAMEAPI void PinmameSetPath(const PINMAME_FILE_TYPE fileType, const char* const p_path)
+PINMAMEAPI PINMAME_STATUS PinmameSetPath(const PINMAME_FILE_TYPE fileType, const char* const p_path)
 {
-	if (!p_path)
-		return;
-
-	char* const newPath = (char*)malloc(strlen(p_path) + 1);
-	strcpy(newPath, p_path);
-
-	switch(fileType) {
-		case PINMAME_FILE_TYPE_ROMS:
-			setPath(FILETYPE_ROM, newPath);
-			break;
-		case PINMAME_FILE_TYPE_NVRAM:
-			setPath(FILETYPE_NVRAM, newPath);
-			break;
-		case PINMAME_FILE_TYPE_SAMPLES:
-			setPath(FILETYPE_SAMPLE, newPath);
-			break;
-		case PINMAME_FILE_TYPE_CONFIG:
-			setPath(FILETYPE_CONFIG, newPath);
-			break;
-		case PINMAME_FILE_TYPE_HIGHSCORE:
-			setPath(FILETYPE_HIGHSCORE, newPath);
-			break;
-		default:
-			free(newPath);
-			break;
+	if ((int)fileType < 0 || (int)fileType >= PINMAME_FILE_TYPE_COUNT) {
+		libpinmame_log_error("PinmameSetPath(): unknown file type %d", (int)fileType);
+		return PINMAME_STATUS_FILE_TYPE_INVALID;
 	}
+
+	// the game thread reads the paths whenever it opens a file
+	if (_isRunning) {
+		libpinmame_log_error("PinmameSetPath(): cannot change paths while a game is running");
+		return PINMAME_STATUS_GAME_ALREADY_RUNNING;
+	}
+
+	free(_pathOverrides[fileType]);
+	_pathOverrides[fileType] = (p_path && p_path[0]) ? CopyPath(p_path) : nullptr;
+
+	ApplyPath(fileType);
+
+	libpinmame_log_info("PinmameSetPath(): fileType=%d, path=%s", (int)fileType, getPath(_pathTypes[fileType].fileType));
+
+	return PINMAME_STATUS_OK;
+}
+
+/******************************************************
+ * PinmameGetPath
+ ******************************************************/
+
+PINMAMEAPI const char* PinmameGetPath(const PINMAME_FILE_TYPE fileType)
+{
+	if ((int)fileType < 0 || (int)fileType >= PINMAME_FILE_TYPE_COUNT)
+		return nullptr;
+
+	return getPath(_pathTypes[fileType].fileType);
 }
 
 /******************************************************
@@ -1326,7 +1386,8 @@ PINMAMEAPI int PinmameIsRunning()
 
 PINMAMEAPI PINMAME_STATUS PinmameReset()
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return PINMAME_STATUS_EMULATOR_NOT_RUNNING;
 
 	machine_reset();
@@ -1340,7 +1401,8 @@ PINMAMEAPI PINMAME_STATUS PinmameReset()
 
 PINMAMEAPI PINMAME_STATUS PinmamePause(const int pause)
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return PINMAME_STATUS_EMULATOR_NOT_RUNNING;
 
 	g_fPause = pause;
@@ -1404,7 +1466,8 @@ PINMAMEAPI void PinmameStop()
 
 PINMAMEAPI PINMAME_HARDWARE_GEN PinmameGetHardwareGen()
 {
-	const UINT64 hardwareGen = (_isRunning == 1 && core_gameData) ? core_gameData->gen : 0;
+	const std::shared_lock lock(_stateMutex);
+	const UINT64 hardwareGen = IsEmulationRunning() ? core_gameData->gen : 0;
 	return (PINMAME_HARDWARE_GEN)hardwareGen;
 }
 
@@ -1414,7 +1477,8 @@ PINMAMEAPI PINMAME_HARDWARE_GEN PinmameGetHardwareGen()
 
 PINMAMEAPI int PinmameGetSwitch(const int swNo)
 {
-	return (_isRunning == 1) ? vp_getSwitch(swNo) : 0;
+	const std::shared_lock lock(_stateMutex);
+	return IsEmulationRunning() ? vp_getSwitch(swNo) : 0;
 }
 
 /******************************************************
@@ -1423,7 +1487,8 @@ PINMAMEAPI int PinmameGetSwitch(const int swNo)
 
 PINMAMEAPI void PinmameSetSwitch(const int swNo, const int state)
 {
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return;
 
 	vp_putSwitch(swNo, state ? 1 : 0);
@@ -1435,7 +1500,8 @@ PINMAMEAPI void PinmameSetSwitch(const int swNo, const int state)
 
 PINMAMEAPI void PinmameSetSwitches(const PinmameSwitchState* const p_states, const int numSwitches)
 {
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return;
 
 	for (int i = 0; i < numSwitches; ++i)
@@ -1502,11 +1568,17 @@ PINMAMEAPI int PinmameGetMaxSolenoids()
 
 PINMAMEAPI int PinmameGetSolenoid(const int solNo)
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning() || solNo < 1 || solNo > CORE_MODOUT_SOL_MAX)
 		return 0;
 
-	if (options.usemodsol & (CORE_MODOUT_FORCE_ON | CORE_MODOUT_ENABLE_PHYSOUT_SOLENOIDS | CORE_MODOUT_ENABLE_MODSOL))
-		core_update_pwm_outputs(CORE_MODOUT_SOL0 + solNo - 1, 1);
+	if (options.usemodsol & (CORE_MODOUT_FORCE_ON | CORE_MODOUT_ENABLE_PHYSOUT_SOLENOIDS | CORE_MODOUT_ENABLE_MODSOL)) {
+		// core_getSol reads 29-48 from other outputs than solNo - 1
+		if (solNo >= 29 && solNo <= 48)
+			core_update_pwm_solenoids();
+		else
+			core_update_pwm_outputs(CORE_MODOUT_SOL0 + solNo - 1, 1);
+	}
 
 	return vp_getSolenoid(solNo);
 }
@@ -1517,7 +1589,8 @@ PINMAMEAPI int PinmameGetSolenoid(const int solNo)
 
 PINMAMEAPI int PinmameGetChangedSolenoids(PinmameSolenoidState* const p_changedStates)
 {
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	core_update_pwm_solenoids();
@@ -1544,11 +1617,13 @@ PINMAMEAPI int PinmameGetMaxLamps()
 
 PINMAMEAPI int PinmameGetLamp(const int lampNo)
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	const int index = IsEmulationRunning() ? vp_getLampIndex(lampNo) : -1;
+	if (index < 0)
 		return 0;
 
 	if (options.usemodsol & (CORE_MODOUT_FORCE_ON | CORE_MODOUT_ENABLE_PHYSOUT_LAMPS))
-		core_update_pwm_outputs(CORE_MODOUT_LAMP0 + lampNo - 1, 1);
+		core_update_pwm_outputs(CORE_MODOUT_LAMP0 + index, 1);
 
 	return vp_getLamp(lampNo);
 }
@@ -1559,7 +1634,8 @@ PINMAMEAPI int PinmameGetLamp(const int lampNo)
 
 PINMAMEAPI int PinmameGetChangedLamps(PinmameLampState* const p_changedStates)
 {
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	core_update_pwm_lamps();
@@ -1586,7 +1662,8 @@ PINMAMEAPI int PinmameGetMaxGIs()
 
 PINMAMEAPI int PinmameGetGI(const int giNo)
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return 0;
 
 	if (options.usemodsol & (CORE_MODOUT_FORCE_ON | CORE_MODOUT_ENABLE_PHYSOUT_GI))
@@ -1601,7 +1678,8 @@ PINMAMEAPI int PinmameGetGI(const int giNo)
 
 PINMAMEAPI int PinmameGetChangedGIs(PinmameGIState* const p_changedStates)
 {
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	core_update_pwm_gis();
@@ -1628,7 +1706,8 @@ PINMAMEAPI int PinmameGetMaxLEDs()
 
 PINMAMEAPI int PinmameGetChangedLEDs(const uint64_t mask, const uint64_t mask2, PinmameLEDState* const p_changedStates)
 {
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	core_update_pwm_segments();
@@ -1655,7 +1734,8 @@ PINMAMEAPI int PinmameGetMaxMechs()
 
 PINMAMEAPI int PinmameGetMech(const int mechNo)
 {
-	return (_isRunning) ? vp_getMech(mechNo) : 0;
+	const std::shared_lock lock(_stateMutex);
+	return IsEmulationRunning() ? vp_getMech(mechNo) : 0;
 }
 
 /******************************************************
@@ -1715,7 +1795,8 @@ PINMAMEAPI int PinmameGetMaxSoundCommands()
 
 PINMAMEAPI int PinmameGetNewSoundCommands(PinmameSoundCommand* const p_newCommands)
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	vp_tChgSound chgSounds;
@@ -1731,7 +1812,8 @@ PINMAMEAPI int PinmameGetNewSoundCommands(PinmameSoundCommand* const p_newComman
 
 PINMAMEAPI int PinmameGetMixerChannelCount()
 {
-   if (!_isRunning)
+   const std::shared_lock lock(_stateMutex);
+   if (!IsEmulationRunning())
       return 0;
 
    // Channels are allocated contiguously from 0; the first unnamed one ends the list.
@@ -1747,7 +1829,8 @@ PINMAMEAPI int PinmameGetMixerChannelCount()
 
 PINMAMEAPI const char* PinmameGetMixerChannelName(const int channel)
 {
-   if (!_isRunning || channel < 0 || channel >= MIXER_MAX_CHANNELS)
+   const std::shared_lock lock(_stateMutex);
+   if (!IsEmulationRunning() || channel < 0 || channel >= MIXER_MAX_CHANNELS)
       return NULL;
 
    return mixer_get_name(channel);
@@ -1759,7 +1842,8 @@ PINMAMEAPI const char* PinmameGetMixerChannelName(const int channel)
 
 PINMAMEAPI int PinmameGetMixerChannelLevel(const int channel)
 {
-   if (!_isRunning || channel < 0 || channel >= MIXER_MAX_CHANNELS || mixer_get_name(channel) == NULL)
+   const std::shared_lock lock(_stateMutex);
+   if (!IsEmulationRunning() || channel < 0 || channel >= MIXER_MAX_CHANNELS || mixer_get_name(channel) == NULL)
       return -1;
 
    // A queued change not yet applied by the emulation thread is what the caller last asked for.
@@ -1773,7 +1857,8 @@ PINMAMEAPI int PinmameGetMixerChannelLevel(const int channel)
 
 PINMAMEAPI int PinmameGetMixerChannelDefaultLevel(const int channel)
 {
-   if (!_isRunning || channel < 0 || channel >= MIXER_MAX_CHANNELS || mixer_get_name(channel) == NULL)
+   const std::shared_lock lock(_stateMutex);
+   if (!IsEmulationRunning() || channel < 0 || channel >= MIXER_MAX_CHANNELS || mixer_get_name(channel) == NULL)
       return -1;
 
    return mixer_get_default_mixing_level(channel);
@@ -1797,7 +1882,8 @@ PINMAMEAPI void PinmameSetMixerChannelLevel(const int channel, const int level)
 
 PINMAMEAPI int PinmameGetDIP(const int dipBank)
 {
-	return (_isRunning) ? vp_getDIP(dipBank) : 0;
+	const std::shared_lock lock(_stateMutex);
+	return IsEmulationRunning() ? vp_getDIP(dipBank) : 0;
 }
 
 /******************************************************
@@ -1806,7 +1892,8 @@ PINMAMEAPI int PinmameGetDIP(const int dipBank)
 
 PINMAMEAPI void PinmameSetDIP(const int dipBank, const int value)
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return;
 
 	vp_setDIP(dipBank, value);
@@ -1827,7 +1914,8 @@ PINMAMEAPI int PinmameGetMaxNVRAM()
 
 PINMAMEAPI int PinmameGetNVRAM(PinmameNVRAMState* const p_nvramStates)
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	if (!(Machine && Machine->drv && Machine->drv->nvram_handler))
@@ -1864,7 +1952,8 @@ PINMAMEAPI int PinmameGetNVRAM(PinmameNVRAMState* const p_nvramStates)
 
 PINMAMEAPI int PinmameSetNVRAM(const PinmameNVRAMState* const p_nvramStates, const int count)
 {
-	if (!_isRunning)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	if (!(Machine && Machine->drv && Machine->drv->nvram_handler))
@@ -1931,7 +2020,8 @@ PINMAMEAPI void PinmameSetSoundMode(const PINMAME_SOUND_MODE soundMode)
 
 PINMAMEAPI int PinmameGetChangedNVRAM(PinmameNVRAMState* const p_nvramStates)
 {
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	if (!(Machine && Machine->drv && Machine->drv->nvram_handler))
@@ -2011,7 +2101,8 @@ static int ReadThroughRamBase(const uint32_t address, uint8_t* const p_buffer, c
 
 PINMAMEAPI int PinmameReadMainCPUMemory(const uint32_t address, uint8_t* const p_buffer, const int size)
 {
-	if (!_isRunning || p_buffer == nullptr || size <= 0)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning() || p_buffer == nullptr || size <= 0)
 	{
 		return 0;
 	}
@@ -2036,7 +2127,8 @@ PINMAMEAPI int PinmameReadMainCPUMemory(const uint32_t address, uint8_t* const p
 
 PINMAMEAPI const uint8_t* PinmameGetRawMemoryRegion(const int region)
 {
-	return _isRunning ? memory_region(region) : nullptr;
+	const std::shared_lock lock(_stateMutex);
+	return IsEmulationRunning() ? memory_region(region) : nullptr;
 }
 
 /******************************************************
@@ -2045,7 +2137,8 @@ PINMAMEAPI const uint8_t* PinmameGetRawMemoryRegion(const int region)
 
 PINMAMEAPI size_t PinmameGetRawMemoryRegionLength(const int region)
 {
-	return _isRunning ? memory_region_length(region) : 0;
+	const std::shared_lock lock(_stateMutex);
+	return IsEmulationRunning() ? memory_region_length(region) : 0;
 }
 
 /******************************************************
@@ -2065,7 +2158,8 @@ PINMAMEAPI void PinmameSetUserData(void* const p_userData)
 
 static void OnGetMachineState(const unsigned int eventId, void* userData, void* msgData)
 {
-   if (_isRunning != 1)
+   const std::shared_lock lock(_stateMutex);
+   if (!IsEmulationRunning())
       return;
 
    auto msg = static_cast<PinMAMEMachineStateMsg*>(msgData);
@@ -2076,7 +2170,7 @@ static void OnGetMachineState(const unsigned int eventId, void* userData, void* 
 
 static void OnReadMemory(const unsigned int eventId, void* userData, void* msgData)
 {
-   if (_isRunning != 1)
+   if (!IsEmulationRunning())
       return;
 
    auto msg = static_cast<PinMAMEReadMemoryMsg*>(msgData);
@@ -2328,9 +2422,10 @@ static void SetupMsgApiGameStates()
                addDevice(PMPI_GROUP_VPM_SOLENOID, fmtString("%s", label), descVPM, mappingId, CTLPI_STATE_FORMAT_UINT8, CTLPI_STATE_TYPE_CUSTOM, getVPM, nullptr, mappingSrc);
             }
          };
-      // 1..28, solenoid/flasher outputs from driver board
+      // 1..28, solenoid/flasher outputs from driver board (pinHeck: 25..32 are GI 0..7)
       for (uint16_t i = 1; i <= 28; i++)
-         addPhysSol(fmtString("Output #%02d", i), nullptr, nullptr, i, GetSolenoid1State, GetSolenoid1VPMState, 1 << (i - 1), i - 1);
+         addPhysSol(((core_gameData->gen & GEN_PINHECK) && i >= 25) ? fmtString("pinHeck GI #%d", i - 25) : fmtString("Output #%02d", i),
+            nullptr, nullptr, i, GetSolenoid1State, GetSolenoid1VPMState, 1 << (i - 1), i - 1);
       // 29..32
       {
          // 29..31, WPC 29 & 30 are J111 GPIO, 31 is a fake GameOn solenoids for fast flip (not modulated, stored in 0x0F00 of solenoids2)
@@ -2348,7 +2443,8 @@ static void SetupMsgApiGameStates()
          else // if (core_gameData->gen & GEN_ALLS11)
          {
             for (uint16_t i = 29; i <= 32; i++)
-               addPhysSol(fmtString("Output #%02d", i), nullptr, nullptr, i, GetSolenoid1State, GetSolenoid1VPMState, 1 << (i - 1), i - 1);
+               addPhysSol((core_gameData->gen & GEN_PINHECK) ? fmtString("pinHeck GI #%d", i - 25) : fmtString("Output #%02d", i),
+                  nullptr, nullptr, i, GetSolenoid1State, GetSolenoid1VPMState, 1 << (i - 1), i - 1);
          }
       }
       // 33..36
@@ -2363,6 +2459,21 @@ static void SetupMsgApiGameStates()
          {
             for (uint16_t i = 33; i <= 36; i++)
                addPhysSol(fmtString("Whitestar Ext Sol #%02d", i - 32), nullptr, nullptr, i, GetSolenoid2State, GetSolenoid2VPMState, 1 << (i - 33 + 4), i - 1);
+         }
+         // 33..36: upper flippers pinHeck and Capcom mirror from the game's coils (where FLIP_SOL declares them); read from
+         // the integrated outputs like 45..48, so they switch with the coils and carry Capcom's flipper strength
+         else if ((core_gameData->gen & (GEN_PINHECK | GEN_CAPCOM)) && coreGlobals.hasModulatedFlippers)
+         {
+            for (uint16_t i = 33; i < 37; i++)
+               if (core_gameData->hw.flippers & FLIP_SOL((i < 35) ? FLIP_UR : FLIP_UL))
+               {
+                  const char* label = (core_gameData->gen & GEN_CAPCOM)
+                     ? fmtString("Upper %s Flipper: %s solenoid (mirrored from solenoids 11/12)", (i < 35) ? "Right" : "Left", (i & 1) ? "Power" : "Hold")
+                     : fmtString("Upper %s Flipper: %s solenoid (CPU controlled)", (i < 35) ? "Right" : "Left", (i & 1) ? "Power" : "Hold");
+                  const int type = core_get_pwm_output_type(CORE_MODOUT_SOL0 + i - 1) == 1 ? CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS : CTLPI_STATE_TYPE_CUSTOM;
+                  addDevice(PMPI_GROUP_SOLENOID, label, nullptr, i, CTLPI_STATE_FORMAT_FLOAT, type, GetPhysOutState, nullptr, CORE_MODOUT_SOL0 + i - 1);
+                  addDevice(PMPI_GROUP_VPM_SOLENOID, fmtString("%s", label), nullptr, i, CTLPI_STATE_FORMAT_UINT8, type, GetPhysOutVPMState, nullptr, CORE_MODOUT_SOL0 + i - 1);
+               }
          }
          // 33..36, WPC fliptronic board: upper flipper solenoids that may also be used as generic modulated outputs (Solenoids 29..32 in schematics)
          // Note: core_getSol returns each coil state while core_getAllSol will set hold coil if either of Hold/Power is set
@@ -2414,13 +2525,14 @@ static void SetupMsgApiGameStates()
                addPhysSol(fmtString("Output #%02d (WPC95 J110 LPDC)", 37 + (i & 3)),
                   nullptr, nullptr, 37 + i, GetSolenoid1State, GetSolenoid1VPMState, 1 << (36 + (i & 3)), 36 + (i & 3));
          }
-         // 37..44, S11, SAM, SPA: extension board with 8 outputs (stored in 0xFF00 of solenoids2)
-         else if (core_gameData->gen & (GEN_ALLS11 | GEN_SAM | GEN_SPA))
+         // 37..44, S11, SAM, SPA: extension board with 8 outputs; pinHeck: GI 8..15 (stored in 0xFF00 of solenoids2)
+         else if (core_gameData->gen & (GEN_ALLS11 | GEN_SAM | GEN_SPA | GEN_PINHECK))
          {
             for (uint16_t i = 37; i <= 44; i++)
                addPhysSol(
-                  fmtString("%s Ext Output #%d", (core_gameData->gen & GEN_ALLS11) ? "S11" : (core_gameData->gen & GEN_SAM) ? "SAM" : "SPA", i - 36),
-                  nullptr, nullptr, i, GetSolenoid2State, GetSolenoid2VPMState, 1 << (8 + i - 37), 40 + i - 37);
+                  (core_gameData->gen & GEN_PINHECK) ? fmtString("pinHeck GI #%d", i - 29)
+                     : fmtString("%s Ext Output #%d", (core_gameData->gen & GEN_ALLS11) ? "S11" : (core_gameData->gen & GEN_SAM) ? "SAM" : "SPA", i - 36),
+                  nullptr, nullptr, i, GetSolenoid2State, GetSolenoid2VPMState, 1 << (8 + i - 37), ((core_gameData->gen & GEN_PINHECK) ? 36 : 40) + i - 37);
          }
       }
       // 45..48, lower flipper solenoids
@@ -2545,6 +2657,33 @@ static void SetupMsgApiGameStates()
       addDevice(PMPI_GROUP_GAMESTATE, fmtString("%s", msgLocals.memMapStates[i].name.c_str()), fmtString("%s", msgLocals.memMapStates[i].group.c_str()), i, msgLocals.memMapStates[i].type, CTLPI_STATE_TYPE_CUSTOM, GetMemMapState, nullptr, i);
    }
    setupGroup(PMPI_GROUP_GAMESTATE, "Game States", "Live game states gathered from internal machine memory");
+
+   // Overlay the names of the I/O states with the ones from the machine definition provided through PinmameSetGameDef (if any)
+   if (!msgLocals.gameDefStates.empty())
+   {
+      for (uint32_t groupId = PMPI_GROUP_SOLENOID; groupId <= PMPI_GROUP_VPM_MECH; groupId++)
+      {
+         // The VPinMAME backward compatible groups expose the same devices as the corresponding new groups
+         uint32_t defGroupId = groupId;
+         switch (groupId)
+         {
+         case PMPI_GROUP_VPM_SOLENOID: defGroupId = PMPI_GROUP_SOLENOID; break;
+         case PMPI_GROUP_VPM_GI: defGroupId = PMPI_GROUP_GI; break;
+         case PMPI_GROUP_VPM_LAMP: defGroupId = PMPI_GROUP_LAMP; break;
+         }
+         auto& group = msgLocals.stateGroups[groupId - PMPI_GROUP_SOLENOID];
+         for (auto& state : group.states)
+         {
+            if (const auto it = msgLocals.gameDefStates.find(std::make_pair(defGroupId, state.mappingId)); it != msgLocals.gameDefStates.end())
+            {
+               char* name = new char[it->second.size() + 1];
+               strcpy(name, it->second.c_str());
+               delete[] state.name;
+               state.name = name;
+            }
+         }
+      }
+   }
 
    msgLocals.stateProvider = std::make_unique<PinballPlugin::Controller::CtrlItemProvider<StateSrcId>>(msgLocals.msgApi, msgLocals.endpointId, CTLPI_STATE_GET_SRC_MSG, CTLPI_STATE_ON_SRC_CHG_MSG);
    std::vector<StateSrcId> stateGroups;
@@ -2875,7 +3014,7 @@ static void SetupMsgApiVideoDisplays()
          def.srcId.GetRenderFrame = &GetDisplayFrame;
          if ((layout->type & CORE_SEGMASK) != CORE_VIDEO)
          {
-            def.srcId.identifyFormat = ((core_gameData->gen & (GEN_SAM | GEN_SPA | GEN_ALVG_DMD2)) || (strncasecmp(Machine->gamedrv->name, "smb", 3) == 0) || (strncasecmp(Machine->gamedrv->name, "cueball", 7) == 0)) ? CTLPI_DISPLAY_ID_FORMAT_BITPLANE4 : CTLPI_DISPLAY_ID_FORMAT_BITPLANE2;
+            def.srcId.identifyFormat = ((core_gameData->gen & (GEN_SAM | GEN_SPA | GEN_ALVG_DMD2 | GEN_PINHECK)) || (strncasecmp(Machine->gamedrv->name, "smb", 3) == 0) || (strncasecmp(Machine->gamedrv->name, "cueball", 7) == 0)) ? CTLPI_DISPLAY_ID_FORMAT_BITPLANE4 : CTLPI_DISPLAY_ID_FORMAT_BITPLANE2; // pinHeck: the raw DMD's 16 levels
             def.srcId.GetIdentifyFrame = &GetDisplayIdFrame;
          }
          msgLocals.nDisplays++;
@@ -3604,7 +3743,8 @@ PINMAMEAPI int PinmameGetMemMapStateInt(const unsigned int index, int64_t* const
 
 	// The getters dereference memory_find_base(), which only means anything
 	// while a ROM is actually executing.
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	const auto& state = msgLocals.memMapStates[index];
@@ -3625,7 +3765,8 @@ PINMAMEAPI int PinmameGetMemMapStateString(const unsigned int index, char* const
 
 	p_buffer[0] = '\0';
 
-	if (_isRunning != 1)
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
 		return -1;
 
 	const auto& state = msgLocals.memMapStates[index];
@@ -3641,4 +3782,67 @@ PINMAMEAPI int PinmameGetMemMapStateString(const unsigned int index, char* const
 	strncpy(p_buffer, p_str, (size_t)bufferSize - 1);
 	p_buffer[bufferSize - 1] = '\0';
 	return 0;
+}
+
+static void SetGameDefImpl(const uint8_t* game, size_t gameSize)
+{
+   msgLocals.gameDefStates.clear();
+   if (!game || gameSize == 0)
+      return;
+
+   // Machine definitions (see https://github.com/vpinball/pinmame-game-defs) declare their
+   // I/O devices in 'inputs'/'outputs' arrays. Each item binds to a group identifying the
+   // state group it belongs to and a device which is the public address reported as mappingId.
+   const json gameDef = json::parse(std::string(reinterpret_cast<const char*>(game), gameSize));
+   static const std::pair<const char*, uint32_t> groupMap[] = {
+      { "pinmame.input.switch",    PMPI_GROUP_SWITCH },
+      { "pinmame.input.dip",       PMPI_GROUP_DIPSWITCH },
+      { "pinmame.output.solenoid", PMPI_GROUP_SOLENOID },
+      { "pinmame.output.gi",       PMPI_GROUP_GI },
+      { "pinmame.output.lamp",     PMPI_GROUP_LAMP },
+   };
+   for (const char* section : { "inputs", "outputs" })
+   {
+      if (!gameDef.contains(section) || !gameDef[section].is_array())
+         continue;
+      for (const json& item : gameDef[section])
+      {
+         if (!item.is_object() || !item.contains("label") || !item["label"].is_string()
+            || !item.contains("binding") || !item["binding"].is_object()
+            || !item["binding"].contains("group") || !item["binding"]["group"].is_string()
+            || !item["binding"].contains("device") || !item["binding"]["device"].is_number_integer())
+            continue;
+         // mappingIds are 16 bit (negative switch numbers as their uint16 pattern), skip what doesn't fit instead of wrapping onto another device
+         const long long device = item["binding"]["device"].get<long long>();
+         if (device < -32768 || device > 65535)
+            continue;
+         for (const auto& [name, groupId] : groupMap)
+            if (item["binding"]["group"] == name)
+               msgLocals.gameDefStates[std::make_pair(groupId, static_cast<uint16_t>(device))] = item["label"].get<std::string>();
+      }
+   }
+}
+
+/******************************************************
+ * PinmameSetGameDef
+ ******************************************************/
+
+PINMAMEAPI PINMAME_STATUS PinmameSetGameDef(const uint8_t* game, size_t gameSize)
+{
+	// the definition is applied when a game starts (SetupMsgApiGameStates), which reads it from the main thread
+	if (_isRunning) {
+		libpinmame_log_error("PinmameSetGameDef(): cannot change the game definition while a game is running");
+		return PINMAME_STATUS_GAME_ALREADY_RUNNING;
+	}
+
+	// Same failure containment as PinmameSetMemMap: the definition file is host-provided
+	// input that may be truncated or hand-edited, so parsing errors must not cross the C boundary.
+	try {
+		SetGameDefImpl(game, gameSize);
+	}
+	catch (const std::exception& e) {
+		msgLocals.gameDefStates.clear();
+		libpinmame_log_error("PinmameSetGameDef(): failed to parse game definition: %s", e.what());
+	}
+	return PINMAME_STATUS_OK;
 }
