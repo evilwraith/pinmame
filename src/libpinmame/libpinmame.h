@@ -542,7 +542,6 @@ PINMAMEAPI void PinmameSetMixerChannelLevel(const int channel, const int level);
 PINMAMEAPI int PinmameGetMaxNVRAM();
 PINMAMEAPI int PinmameGetNVRAM(PinmameNVRAMState* const p_nvramStates);
 PINMAMEAPI int PinmameGetChangedNVRAM(PinmameNVRAMState* const p_nvramStates);
-PINMAMEAPI int PinmameSetNVRAM(const PinmameNVRAMState* const p_nvramStates, const int count);
 PINMAMEAPI int PinmameReadMainCPUByte(uint32_t address, uint8_t* const p_value);
 PINMAMEAPI int PinmameReadMainCPUMemory(uint32_t address, uint8_t* const p_buffer, int size);
 PINMAMEAPI int PinmameWriteMainCPUMemory(uint32_t address, const uint8_t* const p_buffer, int size);
