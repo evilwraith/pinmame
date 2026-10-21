@@ -3282,6 +3282,96 @@ PINMAMEAPI void PinmameSetMsgAPI(MsgPluginAPI* msgApi, unsigned int endpointId)
    msgLocals.endpointId = endpointId;
 }
 
+// Expands the 'repeat' templates of a memory map (pinball-memory-maps descriptors): an array entry
+// carrying "repeat": { "count": N, "step": S } stands for N copies of itself with the 'repeat' key
+// removed, "{#}" in 'label' and 'short_label' replaced by the 1-based index, and i * S added to the
+// entry's 'start' (and 'checksum') when it is itself a descriptor, or else to the 'start' of each of
+// its nested descriptors -- the 'high_scores' / 'mode_champions' form, e.g. Johnny Mnemonic's
+// thirty "Masters of Powerdown" champions. A missing 'start' counts as 0, which with 'offsets' makes
+// it the base the offsets are relative to.
+static void ExpandMemMapRepeats(json& node)
+{
+   const auto isDescriptor = [](const json& n) { return n.is_object() && (n.contains("start") || n.contains("offsets")); };
+   const auto addressOf = [](const json& n) -> long long
+      {
+         if (n.is_number_integer())
+            return n.get<long long>();
+         if (n.is_string())
+         {
+            try { return std::stoll(n.get<std::string>(), nullptr, 0); }
+            catch (const std::exception&) { }
+         }
+         return 0;
+      };
+   const auto shift = [&addressOf](json& n, const char* key, long long delta, bool createIfMissing)
+      {
+         if (n.contains(key))
+            n[key] = addressOf(n[key]) + delta;
+         else if (createIfMissing)
+            n[key] = delta;
+      };
+   std::function<void(json&, int)> relabel;
+   relabel = [&relabel](json& n, int index)
+      {
+         if (!n.is_object())
+            return;
+         for (const char* key : { "label", "short_label" })
+            if (n.contains(key) && n[key].is_string())
+            {
+               std::string text = n[key].get<std::string>();
+               for (size_t pos = text.find("{#}"); pos != std::string::npos; pos = text.find("{#}", pos))
+                  text.replace(pos, 3, std::to_string(index));
+               n[key] = text;
+            }
+         for (auto& [key, child] : n.items())
+            if (child.is_object())
+               relabel(child, index);
+      };
+
+   if (node.is_object())
+   {
+      for (auto& [key, child] : node.items())
+         ExpandMemMapRepeats(child);
+      return;
+   }
+   if (!node.is_array())
+      return;
+   json expanded = json::array();
+   for (json& entry : node)
+   {
+      if (!entry.is_object() || !entry.contains("repeat") || !entry["repeat"].is_object())
+      {
+         ExpandMemMapRepeats(entry);
+         expanded.push_back(std::move(entry));
+         continue;
+      }
+      const json repeat = entry["repeat"];
+      const long long count = repeat.contains("count") && repeat["count"].is_number_integer() ? repeat["count"].get<long long>() : 0;
+      const long long step = repeat.contains("step") && repeat["step"].is_number_integer() ? repeat["step"].get<long long>() : 0;
+      entry.erase("repeat");
+      for (long long i = 0; i < count && i < 4096; i++)
+      {
+         json copy = entry;
+         if (isDescriptor(copy))
+         {
+            shift(copy, "start", i * step, true);
+            if (copy.contains("checksum"))
+               shift(copy, "checksum", i * step, false);
+         }
+         else
+         {
+            for (auto& [key, child] : copy.items())
+               if (isDescriptor(child))
+                  shift(child, "start", i * step, true);
+         }
+         relabel(copy, (int)i + 1);
+         ExpandMemMapRepeats(copy);
+         expanded.push_back(std::move(copy));
+      }
+   }
+   node = std::move(expanded);
+}
+
 static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game, size_t gameSize)
 {
    const auto parseAddress = [](const json& node, unsigned int& value) -> bool
@@ -3365,6 +3455,7 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
 
    std::string gameString(game, game + gameSize);
    json memMapDef = json::parse(gameString);
+   ExpandMemMapRepeats(memMapDef);
 
    // The 'ch' encoding decodes through the map's char_map when it declares one: per the format
    // spec, "if the map has char_map metadata, all bytes (including 0x00) are indexes into that
@@ -3445,11 +3536,16 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
          std::vector<unsigned int> offsets;
          if (fields.contains("offsets") && fields["offsets"].is_array())
          {
+            // With both present, 'start' is a base address added to every entry of 'offsets'
+            // (format spec, and what a 'repeat' over an offsets descriptor produces).
+            unsigned int base = 0;
+            if (fields.contains("start") && !parseAddress(fields["start"], base))
+               return;
             for (const auto& subNode : fields["offsets"]) {
                unsigned int offset;
                if (!parseAddress(subNode, offset))
                   return;
-               offsets.push_back(offset);
+               offsets.push_back(base + offset);
             }
             if (unsigned int length; offsets.size() == 1 && fields.contains("length") && parseAddress(fields["length"], length))
             {
