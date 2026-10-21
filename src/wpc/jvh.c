@@ -96,7 +96,7 @@ static WRITE_HANDLER(bcd_w) {
 }
 
 static WRITE_HANDLER(panel_w) {
-  if (data) locals.segments[offset*8 + core_BitColToNum(~locals.latch & 0xff)].w = core_bcd2seg7[0x0f ^ locals.bcd];
+  if (data) locals.segments[offset*8 + core_LowestBitColToNum(~locals.latch & 0xff)].w = core_bcd2seg7[0x0f ^ locals.bcd];
 }
 
 static WRITE_HANDLER(snd_w) {
@@ -371,7 +371,7 @@ static int jvh_sw2m(int no) {
 }
 static int jvh_m2sw(int col, int row) {
   if (col < 1) return row-7;
-  return (col-1)*10 + row;
+  return (col-1)*10 + row + 1;
 }
 
 MACHINE_DRIVER_START(jvh)
@@ -643,7 +643,7 @@ static INTERRUPT_GEN(vblank3) {
   for (i = 0; i < 40; i++) {
     UINT16 segs = 0xf8a0 + 4 * (i / 8) + (locals.disp_cnt < 8 ? 0 : 2);
     segs = (memory_region(REGION_CPU1)[segs] << 8) | memory_region(REGION_CPU1)[segs + 1];
-    segs = core_ascii2seg16[0x7f & memory_region(REGION_CPU1)[segs + i % 8]];
+    segs = core_ascii2seg16[0x7f & memory_region(REGION_CPU1)[(UINT16)(segs + i % 8)]]; // the pointer comes from RAM, wrap like the 16 bit address bus
     coreGlobals.segments[i].w = i < 16 ? segs : (segs & 0x7f) | ((segs & 0x200) >> 8) | ((segs & 0x2000) >> 11);
   }
   locals.disp_cnt = (locals.disp_cnt + 1) % 16;

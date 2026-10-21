@@ -64,6 +64,7 @@ static inline bool IsEmulationRunning() { return _isRunning == 1; }
 static std::atomic<int> _timeToQuit = 0; // written by PinmameStop on the host thread, polled by the game thread
 static PinmameConfig* _p_Config = nullptr;
 static std::thread* _p_gameThread = nullptr;
+static std::atomic<std::thread::id> _gameThreadId; // set by the game thread itself, so it is valid before PinmameRun stores _p_gameThread
 static void* _p_userData = nullptr;
 
 static char _aliasFromFile[256];
@@ -710,6 +711,11 @@ extern "C" int osd_update_audio_stream(INT16* p_buffer)
 
    if (msgLocals.registered)
    {
+      // Sound disabled (sample rate 0): nothing to stream. Sending empty 0 Hz updates makes the host
+      // try (and fail) to open an audio stream on every frame.
+      if (Machine->sample_rate == 0)
+         return 0;
+
       const int samplesThisFrame = mixer_samples_this_frame();
 
       // Data are only valid in the context of the call, we need to copy the data to feed them on the message thread.
@@ -1125,9 +1131,13 @@ static int StartGame(const int gameNum)
 	memset(_mechInit, 0, sizeof(_mechInit));
 	memset(_mechInfo, 0, sizeof(_mechInfo));
 
+	_gameThreadId = std::this_thread::get_id();
+
 	const int err = run_game(gameNum);
 
 	OnStateChange(0);
+
+	_gameThreadId = std::thread::id();
 
 	return err;
 }
@@ -2155,7 +2165,7 @@ static bool SubmitWrite(const PinMAMEWriteMemoryOp* const ops, const uint32_t co
 	PendingWrite w { ops, count, false };
 
 	/* Already on the emulation thread: apply directly rather than waiting for our own drain. */
-	if (_p_gameThread && std::this_thread::get_id() == _p_gameThread->get_id())
+	if (std::this_thread::get_id() == _gameThreadId.load())
 	{
 		ApplyWrites({ &w });
 		return true;
@@ -2183,16 +2193,39 @@ static bool SubmitWrite(const PinMAMEWriteMemoryOp* const ops, const uint32_t co
 	return true;
 }
 
+/* Like every other API call, only in run state 1 and under the shared lock: the game thread cannot leave state 1
+   (and tear down) while a write is queued or applied, a state change waits at most for SubmitWrite's bounded wait.
+   Nothing is applied unless all ops lie within the main CPU's address space (no wrapping through the address mask). */
+static bool WriteMemory(const PinMAMEWriteMemoryOp* const ops, const uint32_t count)
+{
+	const std::shared_lock lock(_stateMutex);
+	if (!IsEmulationRunning())
+	{
+		return false;
+	}
+
+	const uint64_t addressSpace = (uint64_t)cpunum_address_mask(0) + 1;
+	for (uint32_t op = 0; op < count; op++)
+	{
+		if (ops[op].size && (ops[op].data == nullptr || (uint64_t)ops[op].address + ops[op].size > addressSpace))
+		{
+			return false;
+		}
+	}
+
+	return SubmitWrite(ops, count);
+}
+
 PINMAMEAPI int PinmameWriteMainCPUMemory(const uint32_t address, const uint8_t* const p_buffer, const int size)
 {
-	if (!_isRunning || p_buffer == nullptr || size <= 0)
+	if (p_buffer == nullptr || size <= 0)
 	{
 		return 0;
 	}
 
 	const PinMAMEWriteMemoryOp op { address, (uint32_t)size, p_buffer };
 
-	return SubmitWrite(&op, 1) ? size : 0;
+	return WriteMemory(&op, 1) ? size : 0;
 }
 
 /******************************************************
@@ -2256,14 +2289,15 @@ static void OnReadMemory(const unsigned int eventId, void* userData, void* msgDa
 
 static void OnWriteMemory(const unsigned int eventId, void* userData, void* msgData)
 {
-   if (_isRunning != 1)
-      return;
-
    auto msg = static_cast<PinMAMEWriteMemoryMsg*>(msgData);
-   if (msg->version != 1 || msg->ops == nullptr || msg->count == 0)
+   if (msg->version != 1)
       return;
 
-   msg->applied = SubmitWrite(msg->ops, msg->count) ? msg->count : 0;
+   msg->applied = 0;
+   if (msg->ops == nullptr || msg->count == 0)
+      return;
+
+   msg->applied = WriteMemory(msg->ops, msg->count) ? msg->count : 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

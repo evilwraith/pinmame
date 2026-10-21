@@ -399,7 +399,7 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | Spring Break                                   | 1987 | Gottlieb               | Alphanumeric | `sprbrafp`, `sprbreak`, `sprbrffp` + 7 more          |             |       |
 | Star Wars                                      | 1987 | Sonic                  | Alphanumeric | `sonstwar`, `sonstwr2`                               |             |       |
 | Star's Phoenix                                 | 1987 | Zaccaria               | Alphanumeric | `nstrpffp`, `nstrphfp`, `nstrphnf` + 5 more          |             |       |
-| Thunder Man                                    | 1987 | Apple Time             | Alphanumeric | `thndrman`                                           |             |       |
+| Thunder Man                                    | 1987 | Apple Time             | Alphanumeric | `thndrman`, `thndrmne`, `thndrmnz` + 1 more          |             |       |
 | Victory                                        | 1987 | Gottlieb               | Alphanumeric | `victory`, `victoryf`, `victoryg` + 7 more           |             |       |
 | White Force                                    | 1987 | Unidesa                | Alphanumeric | `whtforce`                                           |             |       |
 | Wolf Man                                       | 1987 | Peyper                 | Alphanumeric | `wolfman`                                            |             |       |
@@ -1146,8 +1146,8 @@ scripts/gen_supported_machines.py
 
 The script reads a cached copy of OPDB and re-downloads only with `--refresh`; `--check`
 fails if this file is out of date. Machine data comes from the OPDB snapshot of
-**2026-10-15**; driver data from `src/wpc` at the commit this file was generated from, on
-**2026-10-15**.
+**2026-10-20**; driver data from `src/wpc` at the commit this file was generated from, on
+**2026-10-20**.
 
 A machine is one OPDB *group*, so a title and its remakes are one row, dated and credited
 to the original. Its status is that of the *worst* of its ROM sets, so "fully working"
