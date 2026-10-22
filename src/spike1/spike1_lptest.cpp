@@ -16,7 +16,7 @@
 // 20 ms is timed exactly, 0 ms closes and opens the switch back to back; a negative switch is one
 // closed at rest, opened for the time. --lamp prints that lamp's level as it changes, --mech that
 // mech's GetMech() value (Ghostbusters' Slimer is mech 0). SPIKE1_LOG passes the subsystem's log
-// on. Windows only: it loads the library with LoadLibrary.
+// on. Windows loads pinmame64.dll with LoadLibrary, Linux libpinmame.so with dlopen.
 
 #include "../libpinmame/libpinmame.h"
 
@@ -35,8 +35,14 @@
 #include <thread>
 #include <vector>
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#if defined(_WIN32)
+ #define WIN32_LEAN_AND_MEAN
+ #include <windows.h>
+#else
+ #include <dlfcn.h>
+ typedef void *HMODULE;
+ static void *GetProcAddress(HMODULE dll, const char *name) { return dlsym(dll, name); }
+#endif
 
 namespace {
 
@@ -247,8 +253,13 @@ int main(int argc, char **argv)
 		else { std::fprintf(stderr, "unknown argument %s\n", a.c_str()); return 2; }
 	}
 
+#if defined(_WIN32)
 	HMODULE dll = LoadLibraryExA(dll_path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
 	if (!dll) { std::fprintf(stderr, "cannot load %s (%lu)\n", dll_path.c_str(), GetLastError()); return 1; }
+#else
+	HMODULE dll = dlopen(dll_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+	if (!dll) { std::fprintf(stderr, "cannot load %s (%s)\n", dll_path.c_str(), dlerror()); return 1; }
+#endif
 	decltype(&PinmameSetConfig) set_config;
 	decltype(&PinmameSetHandleKeyboard) set_keyboard;
 	decltype(&PinmameSetSolenoidMask) set_solenoid_mask;
