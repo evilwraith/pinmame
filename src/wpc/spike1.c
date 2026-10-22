@@ -57,6 +57,10 @@
 #define SPIKE1_MAXCOILS   64
 #define SPIKE1_MAXLEDS    256
 #define SPIKE1_MAXMECHS   8              /* Whoa Nellie's five reels are the most a title has */
+/* GetMech(99): the LCD insert's frame of lcdinsert.bin shown now, -1 for none. Not a mech: the
+   ALP4K fork's Ghostbusters table plays its own copies of the insert's clips, picked by the frame
+   it starts at, as the Stern Pinball Arcade driver it was made for passed that frame on */
+#define SPIKE1_MECH_INSERT_FRAME 99
 #define SPIKE1_FIRSTCUSTSOL CORE_FIRSTCUSTSOL /* solenoid 51 */
 #define SPIKE1_NCUSTSOLS  (CORE_MODOUT_SOL_MAX - SPIKE1_FIRSTCUSTSOL + 1)
 #define SPIKE1_GAMEONSOL  33             /* GAME ON, as SAM's: the flippers enabled - their reflexes armed */
@@ -137,6 +141,7 @@ static struct {
   unsigned audioRate;     /* the sound stream's rate: the game's, once it has set one */
   int ledLamp[SPIKE1_MAXLEDS]; /* the lamp number of LED channel k, 0 for none */
   volatile int mech[SPIKE1_MAXMECHS]; /* each mech's position as of the last I/O exchange, for GetMech */
+  volatile int insertFrame;           /* the insert's frame as of the last I/O exchange (SPIKE1_MECH_INSERT_FRAME) */
 } locals;
 
 static int spike1_stream = -1; /* the sound stream's first channel, the left; the right follows */
@@ -382,6 +387,7 @@ static void spike1_sync_io(void)
     int position = 0;
     locals.mech[i] = spike1_pinmame_motor((unsigned)i, &position, NULL) ? position : 0;
   }
+  locals.insertFrame = spike1_pinmame_insert_frame();
   /* the DMD: a new frame when the game has sent one (a title with the RGB matrix instead draws it
      as video, spike1_rgb_video) */
   if ((core_gameData->lcdLayout->type & CORE_SEGALL) == CORE_DMD && spike1_pinmame_dmd(NULL) != locals.dmdFrames) {
@@ -431,6 +437,7 @@ static INTERRUPT_GEN(spike1_vblank)
    from its own thread, and the machine's motors run on the machine's */
 static int spike1_getMech(int mechNo)
 {
+  if (mechNo == SPIKE1_MECH_INSERT_FRAME) return locals.insertFrame;
   return mechNo >= 0 && mechNo < SPIKE1_MAXMECHS ? locals.mech[mechNo] : 0;
 }
 
