@@ -232,6 +232,9 @@ int main(int argc, char **argv)
 	double report_every = 5.0;
 	std::vector<press> presses;
 	std::vector<int> watch_lamps, watch_mechs;
+	int solmask = 2;          // --solmask: PinmameSetSolenoidMask(2, n); 4 is the lamps alone as levels
+	bool lamp_summary = false; // --lamp-summary: every lamp number seen, its changes and highest level, at the end
+	std::map<int, std::pair<unsigned, int>> lamp_seen;
 	int coin = 81, coins = 4, start = 78;
 	for (int i = 4; i < argc; i++) {
 		const std::string a = argv[i];
@@ -245,6 +248,8 @@ int main(int argc, char **argv)
 		else if (a == "--start-at") start_at = std::atof(next());
 		else if (a == "--report") report_every = std::atof(next());
 		else if (a == "--lamp") watch_lamps.push_back(std::atoi(next()));
+		else if (a == "--solmask") solmask = std::atoi(next());
+		else if (a == "--lamp-summary") lamp_summary = true;
 		else if (a == "--mech") watch_mechs.push_back(std::atoi(next()));
 		else if (a == "--press") { // <s>:<switch>[:<ms>]; a negative switch is opened (one closed at rest)
 			press p;
@@ -288,7 +293,7 @@ int main(int argc, char **argv)
 	set_keyboard(0);
 	// HandleMechanics stays at its default, as a Spike 1 table leaves it: with 0, GetMech would
 	// read PinMAME's simulated mechs instead of the machine's motors and steppers
-	set_solenoid_mask(2, 2); // the lamps and coils as levels, as VPX tables for Spike 1 ask
+	set_solenoid_mask(2, solmask); // 2: the lamps and coils as levels, as VPX tables for Spike 1 ask
 
 	g_t0 = clock_type::now();
 	const PINMAME_STATUS status = run(set.c_str());
@@ -313,6 +318,7 @@ int main(int argc, char **argv)
 		const int changed = changed_lamps(lamps.data());
 		for (int k = 0; k < changed; k++) {
 			lamp_changes++;
+			{ auto &e = lamp_seen[lamps[k].lampNo]; e.first++; e.second = std::max(e.second, lamps[k].state); }
 			if (std::find(watch_lamps.begin(), watch_lamps.end(), lamps[k].lampNo) != watch_lamps.end())
 				std::printf("[%7.3f] lamp %d %d\n", now_s(), lamps[k].lampNo, lamps[k].state);
 		}
@@ -370,5 +376,7 @@ int main(int argc, char **argv)
 	stop();
 	for (int i = 0; i < 500 && is_running(); i++) std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	std::printf("[%7.3f] stopped (running %d)\n", now_s(), is_running());
+	if (lamp_summary)
+		for (const auto &e : lamp_seen) std::printf("lamp-summary %d changes %u max %d\n", e.first, e.second.first, e.second.second);
 	return 0;
 }
