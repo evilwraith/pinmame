@@ -382,6 +382,13 @@ int spike1_pinmame_insert(unsigned short *rgb565, unsigned *backlight)
 	return 1;
 }
 
+int spike1_pinmame_insert_frame(void)
+{
+	const auto guard = native_guard();
+	const spike1_devices *d = devices();
+	return d ? d->insert_frame_index(now_ns()) : -1;
+}
+
 int spike1_pinmame_lcd(unsigned short *rgb565)
 {
 	const auto guard = native_guard();
