@@ -55,6 +55,10 @@ public:
 	std::vector<uint8_t> save() const;
 	bool load(const uint8_t *data, size_t size);
 	bool written_empty() const { return m_written.empty() && m_dirs.empty() && m_removed.empty(); }
+	// The written layer's directories (sorted, so parents come first) and files, for a host that
+	// keeps them as real files (spike1_native)
+	const std::set<std::string> &written_directories() const { return m_dirs; }
+	const std::map<std::string, std::shared_ptr<std::vector<uint8_t>>> &written_files() const { return m_written; }
 
 private:
 	std::string m_root;
