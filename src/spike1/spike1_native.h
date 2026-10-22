@@ -11,9 +11,9 @@
 // - The program runs in a sandbox: a private mount namespace and a chroot holding /games/<folder>
 //   (the title's files: the on-disk ones bound read-only, the rest written into a tmpfs), /data
 //   (the game's NVRAM files, a host directory filled from the NVRAM block), /tmp and an empty
-//   /dev; in a session of its own, as root of a user namespace that maps to nobody (the game
-//   creates its NVRAM files with an undefined mode and relies on root to read them back), with
-//   no_new_privs.
+//   /dev; in a session of its own, as root of a user namespace that maps to the host's own user,
+//   or to nobody when the host is root (the game creates its NVRAM files with an undefined mode
+//   and relies on root to read them back), with no_new_privs.
 // - A seccomp filter passes everything through natively except: open/openat, select/poll and the
 //   sync calls, which come to the supervisor and go on natively unless a device is involved;
 //   read, write, ioctl, close and fcntl on the device descriptors (DEVICE_FD up), which the device
@@ -31,9 +31,10 @@
 // - When the program exits (a slam tilt), it starts again a second later as the board's
 //   game_monitor does; /data and the devices carry on.
 //
-// Needs Linux, an arm64 build and root (for the mount namespace and the chroot); start() fails
-// with the reason otherwise, or when the kernel cannot run the program, and the host falls back
-// to the emulated machine.
+// Needs Linux and an arm64 build, and a kernel that lets an unprivileged process make a user
+// namespace (the ALP4K's does; VPX runs there as an ordinary user). start() fails with the step the
+// kernel refused, or when it cannot run the program, and the host falls back to the emulated
+// machine.
 
 #pragma once
 
@@ -71,7 +72,7 @@ public:
 	spike1_native(const spike1_native &) = delete;
 	spike1_native &operator=(const spike1_native &) = delete;
 
-	// Whether this build and host can run a program natively at all (Linux, arm64, root)
+	// Whether this build can run a program natively at all (Linux, arm64); the kernel has its say in start()
 	static bool supported(std::string &why);
 
 	bool start(const config &cfg, std::string &error);

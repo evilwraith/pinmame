@@ -7,7 +7,7 @@
 // files arrive as PinMAME ROM regions, which spike1.c passes in: the subsystem opens no files.
 //
 // Two machines answer the contract. Where the host can run the game program as itself (Linux on
-// arm64 with AArch32 user mode, as root: spike1_native), it does, and the program runs at the
+// arm64 with AArch32 user mode and user namespaces: spike1_native), it does, and the program runs at the
 // host CPU's speed; everywhere else, or when that fails to start, MAME's ARM9 core runs it
 // (spike1_linux). Both have the same devices, so the rest is the same. SPIKE1_NATIVE=0 in the
 // environment keeps to the emulated machine; SPIKE1_NATIVE_CPUS=<list> (e.g. 0,5-7) puts the
