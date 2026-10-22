@@ -1,39 +1,16 @@
 // license:BSD-3-Clause
 
-// PinMAME Spike 1 subsystem - native harness (Linux, on an ARM host that runs 32-bit ARM programs)
-//
-// spike1boot runs the game program on MAME's ARM9 interpreter. A host whose kernel runs AArch32
-// user programs (arm64 with CONFIG_COMPAT, on a CPU with AArch32 at EL0) can run the program as
-// itself instead: a real process whose threads the host schedules. Only what the board's hardware
-// would answer is handled here, by the same spike1_devices the emulated machine uses.
-//
-// - The child gets a private mount namespace and a chroot holding /games/<folder> (the set's files
-//   bound read-only; the program itself copied, as the set may sit on a noexec mount), /data (the
-//   state directory's data/, where the game keeps its NVRAM files), /tmp and an empty /dev. It
-//   runs in its own session, as root of a user namespace that maps to nobody, with no_new_privs.
-// - A seccomp filter passes everything through natively except: open/openat, select/poll and the
-//   sync calls, which come here and go on natively unless a device is involved; read, write,
-//   ioctl, close and fcntl on the device descriptors (DEVICE_FD up), which the device model
-//   answers; sched_setscheduler and the like, answered 0 without effect (the game asks for SCHED_RR
-//   97 for its threads, which would preempt the host's own); execve, mount, reboot and the like,
-//   refused.
-// - A device open gets a placeholder descriptor (/dev/null) at a fixed number, so the filter can
-//   tell device calls apart by their descriptor. The device model reaches the game's memory with
-//   process_vm_readv/writev (spike1_memory's remote mode).
-// - Time is the host's monotonic clock from the program's start. A device call that would wait
-//   (WAIT) is asked again at its time; until then the calling thread sleeps in the kernel.
-//
-//   spike1native --files <set dir> --game /games/<folder>/game [--state <dir>] [--seconds <n>]
-//                [--switch <s>:<name>[:<ms>]]... [--dmd <s>] [--stats <s>] [--cpus <list>]
-//                [--encoder-motor <node>:<motor>:<low>:<high>:<counts a second>] [--trace]
-//
-// Run as root: the game runs as nobody, and the supervisor reads its memory and hands it descriptors.
+// PinMAME Spike 1 subsystem - the game program run natively. See spike1_native.h
 
-#include "spike1_devices.h"
-#include "spike1_memory.h"
+#include "spike1_native.h"
+#include "spike1_vfs.h"
+
+#include <algorithm>
+#include <cstring>
+
+#if defined(__linux__) && defined(__aarch64__)
 
 #include <fcntl.h>
-#include <grp.h>
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
@@ -41,9 +18,9 @@
 #include <sched.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
-#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -51,19 +28,19 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <algorithm>
-#include <cctype>
 #include <cerrno>
-#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <map>
-#include <string>
-#include <vector>
+
+#ifndef P_PIDFD
+#define P_PIDFD 3
+#endif
+#ifndef CLONE_PIDFD
+#define CLONE_PIDFD 0x00001000
+#endif
 
 namespace {
 
@@ -71,27 +48,17 @@ namespace {
 namespace nr { enum : uint32_t {
 	read = 3, write = 4, open = 5, close = 6, execve = 11, mknod = 14, mount = 21, ptrace = 26, sync = 36, kill = 37,
 	umount2 = 52, ioctl = 54, fcntl = 55, chroot = 61, sethostname = 74, settimeofday = 79, swapon = 87, reboot = 88,
-	setpriority = 97, swapoff = 115, fsync = 118, adjtimex = 124, init_module = 128, delete_module = 129,
+	setpriority = 97, swapoff = 115, fsync = 118, uname = 122, adjtimex = 124, init_module = 128, delete_module = 129,
 	newselect = 142, readv = 145, writev = 146, fdatasync = 148, sched_setparam = 154, sched_setscheduler = 156,
-	poll = 168, fcntl64 = 221, sched_setaffinity = 241, clock_settime = 262, openat = 322, mknodat = 324,
-	pselect6 = 335, ppoll = 336, unshare = 337, kexec_load = 347, syncfs = 373, finit_module = 379,
+	poll = 168, fcntl64 = 221, sched_setaffinity = 241, set_tid_address = 256, clock_settime = 262, openat = 322,
+	mknodat = 324, pselect6 = 335, ppoll = 336, unshare = 337, kexec_load = 347, syncfs = 373, finit_module = 379,
 }; }
 
 constexpr int DEVICE_FD = 200, DEVICE_SLOTS = 32;  // the device descriptors: DEVICE_FD .. DEVICE_FD + DEVICE_SLOTS - 1
 constexpr uint64_t RECHECK_NS = 1000000;           // as spike1_linux's POLL_RECHECK_NS
 constexpr uint32_t O_NONBLOCK_ = 0x800, O_CLOEXEC_ = 0x80000;
 constexpr uid_t NOBODY = 65534;
-
-struct options
-{
-	std::string files, game, state = "spike1_native_state", cpus;
-	double seconds = 30.0, dmd_every = 0.0, stats_every = 10.0;
-	bool trace = false;
-	struct press { double at, held_ms; std::string name; bool down = false, up = false; };
-	std::vector<press> presses;
-	struct encoder_motor { int node, motor, low, high; unsigned counts_per_s; };
-	std::vector<encoder_motor> encoder_motors;
-};
+constexpr size_t SMALL_FILE = 64u << 20;           // a file not on disk as a whole is written into the sandbox up to this size
 
 uint64_t mono_ns()
 {
@@ -100,11 +67,7 @@ uint64_t mono_ns()
 	return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
 }
 
-[[noreturn]] void child_fail(const char *what)
-{
-	std::fprintf(stderr, "spike1native child: %s: %s\n", what, std::strerror(errno));
-	_exit(127);
-}
+std::string hex(uint64_t v) { char b[24]; std::snprintf(b, sizeof(b), "0x%llx", (unsigned long long)v); return b; }
 
 // ---------------------------------------------------------------- the filter
 std::vector<sock_filter> build_filter()
@@ -119,7 +82,9 @@ std::vector<sock_filter> build_filter()
 	jump(AUDIT_ARCH_ARM, 1, 0);
 	stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW); // the host's own calls up to the exec
 	stmt(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, nr));
-	for (uint32_t n : { nr::open, nr::openat, nr::newselect, nr::pselect6, nr::poll, nr::ppoll, nr::sync, nr::syncfs, nr::fsync, nr::fdatasync })
+	// set_tid_address and uname: the C library's first calls, where the program is held (start())
+	for (uint32_t n : { nr::open, nr::openat, nr::newselect, nr::pselect6, nr::poll, nr::ppoll, nr::sync, nr::syncfs, nr::fsync, nr::fdatasync,
+			nr::set_tid_address, nr::uname })
 		ret_if(n, SECCOMP_RET_USER_NOTIF);
 	for (uint32_t n : { nr::sched_setscheduler, nr::sched_setparam, nr::sched_setaffinity, nr::setpriority })
 		ret_if(n, SECCOMP_RET_ERRNO | 0); // returns 0, does nothing
@@ -153,214 +118,474 @@ std::vector<sock_filter> build_filter()
 }
 
 // ---------------------------------------------------------------- the child
-void send_fd(int sock, int fd)
+// The child shares the host's memory until its exec (CLONE_VM | CLONE_VFORK, as posix_spawn does):
+// no page tables to copy from a large host, and no GPU mappings inherited. So it runs on
+// everything prepared here, and makes raw system calls only: no allocation, no locks, and no C
+// library wrapper that thinks it has the host's threads (setresuid would signal them all)
+struct child_plan
 {
-	char dummy = 0;
-	iovec iov{ &dummy, 1 };
-	alignas(cmsghdr) char buf[CMSG_SPACE(sizeof(int))] = {};
-	msghdr msg{};
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-	msg.msg_control = buf;
-	msg.msg_controllen = sizeof(buf);
-	cmsghdr *c = CMSG_FIRSTHDR(&msg);
-	c->cmsg_level = SOL_SOCKET;
-	c->cmsg_type = SCM_RIGHTS;
-	c->cmsg_len = CMSG_LEN(sizeof(int));
-	std::memcpy(CMSG_DATA(c), &fd, sizeof(int));
-	if (sendmsg(sock, &msg, 0) < 0) child_fail("sendmsg");
-}
-
-int receive_fd(int sock)
-{
-	char dummy;
-	iovec iov{ &dummy, 1 };
-	alignas(cmsghdr) char buf[CMSG_SPACE(sizeof(int))] = {};
-	msghdr msg{};
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-	msg.msg_control = buf;
-	msg.msg_controllen = sizeof(buf);
-	if (recvmsg(sock, &msg, 0) <= 0) return -1;
-	cmsghdr *c = CMSG_FIRSTHDR(&msg);
-	if (!c || c->cmsg_type != SCM_RIGHTS) return -1;
-	int fd;
-	std::memcpy(&fd, CMSG_DATA(c), sizeof(int));
-	return fd;
-}
-
-void mkdirs(const std::string &path, mode_t mode)
-{
-	std::error_code ec;
-	std::filesystem::create_directories(path, ec);
-	chmod(path.c_str(), mode);
-}
-
-[[noreturn]] void child_main(const options &o, const std::string &root, const std::string &data_dir, int sock)
-{
-	const std::string folder = o.game.substr(0, o.game.rfind('/'));
-	const std::string program = o.game.substr(o.game.rfind('/') + 1);
-	setsid();
-	umask(022); // the chroot is for the game to read
-	const int devnull = ::open("/dev/null", O_RDWR);
-	if (devnull >= 0) { dup2(devnull, 0); close(devnull); }
-
-	// The mounts, as the host's root, in a mount namespace of the game's own
-	if (unshare(CLONE_NEWNS) < 0) child_fail("unshare mount namespace");
-	if (mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) < 0) child_fail("mount private");
-	if (mount("tmpfs", root.c_str(), "tmpfs", MS_NOSUID | MS_NODEV, "size=64m,mode=755") < 0) child_fail("mount tmpfs");
-	const std::string games = root + folder;
-	mkdirs(games, 0755);
-	std::error_code ec;
-	for (const auto &e : std::filesystem::directory_iterator(o.files, ec)) {
-		if (!e.is_regular_file()) continue;
-		const std::string name = e.path().filename().string(), to = games + "/" + name;
-		if (name == program) { // copied: the set may be on a noexec mount
-			if (!std::filesystem::copy_file(e.path(), to, ec)) child_fail("copy program");
-			chmod(to.c_str(), 0755);
-			continue;
-		}
-		const int t = ::open(to.c_str(), O_CREAT | O_WRONLY, 0444);
-		if (t < 0) child_fail("create mount point");
-		close(t);
-		if (mount(e.path().c_str(), to.c_str(), nullptr, MS_BIND, nullptr) < 0) child_fail("bind set file");
-		if (mount(nullptr, to.c_str(), nullptr, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, nullptr) < 0) child_fail("remount set file read-only");
-	}
-	mkdirs(root + "/data", 0755);
-	if (mount(data_dir.c_str(), (root + "/data").c_str(), nullptr, MS_BIND, nullptr) < 0) child_fail("bind /data");
-	mkdirs(root + "/tmp", 01777);
-	mkdirs(root + "/dev", 0755);
-	if (chdir(root.c_str()) < 0) child_fail("chdir");
-
-	// Nobody to the host, root to the game. The board runs the game as root, and the game counts on
-	// it: it creates its NVRAM files with whatever mode a register holds (open without a mode
-	// argument), then reads them back. Root of a user namespace mapped to nobody gets that, and
-	// nothing outside. The process stays dumpable so it can write its own maps; the chroot comes
-	// last, as a chrooted process cannot make a user namespace
-	if (setgroups(0, nullptr) < 0 || setresgid(NOBODY, NOBODY, NOBODY) < 0 || setresuid(NOBODY, NOBODY, NOBODY) < 0) child_fail("drop to nobody");
-	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
-	if (unshare(CLONE_NEWUSER) < 0) child_fail("unshare user namespace");
-	auto write_file = [](const char *path, const std::string &text) {
-		const int f = ::open(path, O_WRONLY);
-		if (f < 0 || ::write(f, text.data(), text.size()) != ssize_t(text.size())) child_fail(path);
-		close(f);
-	};
-	write_file("/proc/self/setgroups", "deny");
-	write_file("/proc/self/uid_map", "0 " + std::to_string(NOBODY) + " 1");
-	write_file("/proc/self/gid_map", "0 " + std::to_string(NOBODY) + " 1");
-	if (chroot(".") < 0 || chdir("/") < 0) child_fail("chroot");
-
-	if (!o.cpus.empty()) {
-		cpu_set_t set;
-		CPU_ZERO(&set);
-		for (const char *p = o.cpus.c_str(); *p; ) {
-			char *end;
-			const long a = std::strtol(p, &end, 10);
-			long b = a;
-			if (*end == '-') b = std::strtol(end + 1, &end, 10);
-			for (long c = a; c <= b; c++) CPU_SET(int(c), &set);
-			p = *end == ',' ? end + 1 : end;
-			if (end == p && *p) break;
-		}
-		if (sched_setaffinity(0, sizeof(set), &set) < 0) child_fail("sched_setaffinity");
-	}
-	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) child_fail("no_new_privs");
-	std::vector<sock_filter> filter = build_filter();
-	sock_fprog prog{ uint16_t(filter.size()), filter.data() };
-	const int listener = int(syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, &prog));
-	if (listener < 0) child_fail("seccomp");
-	send_fd(sock, listener);
-	close(listener);
-	close(sock);
-
-	const std::string path = o.game;
-	char *argv[] = { const_cast<char *>(path.c_str()), nullptr };
-	const char *env[] = { "HOME=/root", "PATH=/bin:/usr/bin:/usr/local/bin", "LANG=C", "LC_ALL=C", "GAMES_PATH=/games", nullptr };
-	execve(path.c_str(), argv, const_cast<char **>(env));
-	child_fail("execve");
-}
-
-// ---------------------------------------------------------------- the supervisor
-class supervisor
-{
-public:
-	supervisor(const options &o) : m_opt(o), m_dev(m_mem) {}
-	int run();
-
-private:
-	struct call { seccomp_notif n; uint64_t wake_ns = 0, poll_deadline = 0; };
-	struct slot { bool used = false; spike1_devices::handle h; uint32_t flags = 0; };
-	enum class outcome { reply, pass, wait };
-
-	options m_opt;
-	spike1_memory m_mem;
-	spike1_devices m_dev;
-	int m_listener = -1, m_pidfd = -1;
-	pid_t m_child = 0;
-	uint64_t m_t0 = 0;
-	bool m_started = false;
-	slot m_slots[DEVICE_SLOTS];
-	std::vector<call> m_pending;
-	std::map<uint32_t, uint64_t> m_counts;      // notifications per system call
-	uint64_t m_notifications = 0, m_syncs = 0;
-	std::map<std::string, uint32_t> m_symbols, m_symbol_sizes;
-	std::vector<std::string> m_set_files;
-	std::string m_nvram_path;
-
-	uint64_t now_ns() const { return mono_ns() - m_t0; }
-	void log(const std::string &line) const { std::printf("[%10.6f] %s\n", double(now_ns()) / 1e9, line.c_str()); std::fflush(stdout); }
-	bool load_symbols(const std::string &path);
-	void start_devices();
-	slot *device(int fd) { const int i = fd - DEVICE_FD; return i >= 0 && i < DEVICE_SLOTS && m_slots[i].used ? &m_slots[i] : nullptr; }
-	bool child_string(pid_t pid, uint32_t addr, std::string &out);
-	bool child_read(pid_t pid, uint32_t addr, void *dst, size_t len);
-	bool child_write(pid_t pid, uint32_t addr, const void *src, size_t len);
-	int add_fd(const call &c, int src, int at, bool cloexec);
-	short native_revents(int fd, short events);
-	outcome handle(call &c, int64_t &val);
-	outcome open_call(call &c, int64_t &val);
-	outcome poll_call(call &c, int64_t &val);
-	void respond(const call &c, outcome o, int64_t val);
-	void print_dmd();
-	void tick(uint64_t now);
-	bool child_cpu(double &seconds, unsigned &threads) const;
+	struct dir { const char *path; mode_t mode; };
+	struct wfile { const char *path; const uint8_t *data; size_t size; mode_t mode; };
+	struct bind { const char *src, *dst; };
+	const dir *dirs = nullptr; size_t ndirs = 0;
+	const wfile *files = nullptr; size_t nfiles = 0;
+	const bind *binds = nullptr; size_t nbinds = 0;
+	const char *root = nullptr, *tmpfs_options = nullptr, *data_src = nullptr, *data_dst = nullptr;
+	const char *uid_map = nullptr, *gid_map = nullptr;
+	cpu_set_t cpus;
+	bool set_cpus = false;
+	sock_fprog prog{};
+	int sock = -1;
+	const char *exec_path = nullptr;
+	char *const *argv = nullptr;
+	char *const *envp = nullptr;
 };
 
-bool supervisor::load_symbols(const std::string &path)
+struct child_report { int32_t step, err; }; // step 0: the listener comes with it
+
+long sys(long n, long a = 0, long b = 0, long c = 0, long d = 0, long e = 0)
 {
-	std::ifstream in(path, std::ios::binary);
-	std::vector<uint8_t> elf((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-	if (elf.size() < 52) return false;
-	auto u32 = [&](size_t o) { uint32_t v = 0; if (o + 4 <= elf.size()) std::memcpy(&v, &elf[o], 4); return v; };
-	auto u16 = [&](size_t o) { uint16_t v = 0; if (o + 2 <= elf.size()) std::memcpy(&v, &elf[o], 2); return v; };
-	// as spike1_linux::load_elf: objects and functions of the program's symbol table
-	const uint32_t shoff = u32(32);
-	const uint16_t shentsize = u16(46), shnum = u16(48);
-	for (uint32_t i = 0; i < shnum && shoff + uint64_t(i + 1) * shentsize <= elf.size(); i++) {
-		const size_t o = shoff + size_t(i) * shentsize;
-		if (u32(o + 4) != 2) continue; // SHT_SYMTAB
-		const uint32_t symoff = u32(o + 16), symsize = u32(o + 20), link = u32(o + 24);
-		if (link >= shnum) break;
-		const uint32_t stroff = u32(shoff + size_t(link) * shentsize + 16);
-		for (uint64_t s = symoff; s + 16 <= uint64_t(symoff) + symsize && s + 16 <= elf.size(); s += 16) {
-			const uint32_t name = u32(size_t(s)), value = u32(size_t(s) + 4);
-			const uint8_t type = elf[size_t(s) + 12] & 15;
-			if (!value || (type != 1 && type != 2) || uint64_t(stroff) + name >= elf.size()) continue;
-			m_symbols.emplace(reinterpret_cast<const char *>(&elf[stroff + name]), value);
-			m_symbol_sizes.emplace(reinterpret_cast<const char *>(&elf[stroff + name]), u32(size_t(s) + 8));
-		}
-	}
-	return !m_symbols.empty();
+	const long r = syscall(n, a, b, c, d, e);
+	return r < 0 ? -errno : r;
 }
 
-// The machine's devices start once the program is loaded: the node bus reads the game's own board
-// tables from its memory
-void supervisor::start_devices()
+[[noreturn]] void child_fail(int sock, int step, long err)
 {
-	m_started = true;
+	child_report rep{ step, int32_t(-err) };
+	iovec iov{ &rep, sizeof(rep) };
+	msghdr msg{};
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	sys(SYS_sendmsg, sock, long(&msg), 0);
+	sys(SYS_exit_group, 127);
+	for (;;) {}
+}
+
+// The steps of the child's set-up, for its report when one fails
+enum child_step { STEP_SOCKET = 1, STEP_CLOSE_RANGE, STEP_SETSID, STEP_UNSHARE_NS, STEP_PRIVATE, STEP_TMPFS, STEP_MKDIR, STEP_WRITE,
+	STEP_MOUNT_POINT, STEP_BIND, STEP_READ_ONLY, STEP_BIND_DATA, STEP_CHDIR, STEP_SETGROUPS, STEP_SETRESGID, STEP_SETRESUID,
+	STEP_DUMPABLE, STEP_UNSHARE_USER, STEP_MAPS, STEP_CHROOT, STEP_AFFINITY, STEP_NO_NEW_PRIVS, STEP_SECCOMP, STEP_SEND, STEP_EXEC };
+
+int child_entry(void *arg)
+{
+	const child_plan &p = *static_cast<const child_plan *>(arg);
+	long r;
+#define CHILD_TRY(step, expr) do { if ((r = (expr)) < 0) child_fail(3, step, r); } while (0)
+	// the report socket to 3, and nothing else of the host's open
+	if (p.sock != 3 && sys(SYS_dup3, p.sock, 3, 0) < 0) child_fail(p.sock, STEP_SOCKET, -EBADF);
+	CHILD_TRY(STEP_CLOSE_RANGE, sys(SYS_close_range, 4, ~0u, 0));
+	CHILD_TRY(STEP_SETSID, sys(SYS_setsid));
+	sys(SYS_umask, 022);
+	const long devnull = sys(SYS_openat, AT_FDCWD, long("/dev/null"), O_RDWR);
+	if (devnull >= 0) { sys(SYS_dup3, devnull, 0, 0); sys(SYS_close, devnull); }
+
+	// the mounts, as the host's root, in a mount namespace of the game's own
+	CHILD_TRY(STEP_UNSHARE_NS, sys(SYS_unshare, CLONE_NEWNS));
+	CHILD_TRY(STEP_PRIVATE, sys(SYS_mount, 0, long("/"), 0, MS_REC | MS_PRIVATE, 0));
+	CHILD_TRY(STEP_TMPFS, sys(SYS_mount, long("tmpfs"), long(p.root), long("tmpfs"), MS_NOSUID | MS_NODEV, long(p.tmpfs_options)));
+	for (size_t i = 0; i < p.ndirs; i++) {
+		CHILD_TRY(STEP_MKDIR, sys(SYS_mkdirat, AT_FDCWD, long(p.dirs[i].path), p.dirs[i].mode));
+		CHILD_TRY(STEP_MKDIR, sys(SYS_fchmodat, AT_FDCWD, long(p.dirs[i].path), p.dirs[i].mode));
+	}
+	for (size_t i = 0; i < p.nfiles; i++) {
+		const long fd = sys(SYS_openat, AT_FDCWD, long(p.files[i].path), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, p.files[i].mode);
+		if (fd < 0) child_fail(3, STEP_WRITE, fd);
+		for (size_t done = 0; done < p.files[i].size; ) {
+			const long n = sys(SYS_write, fd, long(p.files[i].data + done), long(p.files[i].size - done));
+			if (n <= 0) child_fail(3, STEP_WRITE, n < 0 ? n : -EIO);
+			done += size_t(n);
+		}
+		sys(SYS_close, fd);
+	}
+	for (size_t i = 0; i < p.nbinds; i++) {
+		const long fd = sys(SYS_openat, AT_FDCWD, long(p.binds[i].dst), O_CREAT | O_WRONLY | O_CLOEXEC, 0444);
+		if (fd < 0) child_fail(3, STEP_MOUNT_POINT, fd);
+		sys(SYS_close, fd);
+		CHILD_TRY(STEP_BIND, sys(SYS_mount, long(p.binds[i].src), long(p.binds[i].dst), 0, MS_BIND, 0));
+		CHILD_TRY(STEP_READ_ONLY, sys(SYS_mount, 0, long(p.binds[i].dst), 0, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, 0));
+	}
+	CHILD_TRY(STEP_BIND_DATA, sys(SYS_mount, long(p.data_src), long(p.data_dst), 0, MS_BIND, 0));
+	CHILD_TRY(STEP_CHDIR, sys(SYS_chdir, long(p.root)));
+
+	// Nobody to the host, root to the game: the board runs the game as root, and the game counts
+	// on it (it creates its NVRAM files with whatever mode a register holds, then reads them back).
+	// Root of a user namespace mapped to nobody gets that, and nothing outside. Dumpable, so it can
+	// write its own maps; the chroot comes last, as a chrooted process cannot make a user namespace
+	CHILD_TRY(STEP_SETGROUPS, sys(SYS_setgroups, 0, 0));
+	CHILD_TRY(STEP_SETRESGID, sys(SYS_setresgid, NOBODY, NOBODY, NOBODY));
+	CHILD_TRY(STEP_SETRESUID, sys(SYS_setresuid, NOBODY, NOBODY, NOBODY));
+	CHILD_TRY(STEP_DUMPABLE, sys(SYS_prctl, PR_SET_DUMPABLE, 1, 0, 0, 0));
+	CHILD_TRY(STEP_UNSHARE_USER, sys(SYS_unshare, CLONE_NEWUSER));
+	const char *const maps[3][2] = { { "/proc/self/setgroups", "deny" }, { "/proc/self/uid_map", p.uid_map }, { "/proc/self/gid_map", p.gid_map } };
+	for (const auto &m : maps) {
+		const long fd = sys(SYS_openat, AT_FDCWD, long(m[0]), O_WRONLY | O_CLOEXEC);
+		if (fd < 0) child_fail(3, STEP_MAPS, fd);
+		size_t len = 0;
+		while (m[1][len]) len++;
+		const long n = sys(SYS_write, fd, long(m[1]), long(len));
+		if (n != long(len)) child_fail(3, STEP_MAPS, n < 0 ? n : -EIO);
+		sys(SYS_close, fd);
+	}
+	CHILD_TRY(STEP_CHROOT, sys(SYS_chroot, long(".")));
+	CHILD_TRY(STEP_CHROOT, sys(SYS_chdir, long("/")));
+	if (p.set_cpus) CHILD_TRY(STEP_AFFINITY, sys(SYS_sched_setaffinity, 0, sizeof(p.cpus), long(&p.cpus)));
+	CHILD_TRY(STEP_NO_NEW_PRIVS, sys(SYS_prctl, PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
+	const long listener = sys(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, long(&p.prog));
+	if (listener < 0) child_fail(3, STEP_SECCOMP, listener);
+	{
+		child_report rep{ 0, 0 };
+		iovec iov{ &rep, sizeof(rep) };
+		alignas(cmsghdr) char buf[CMSG_SPACE(sizeof(int))] = {};
+		msghdr msg{};
+		msg.msg_iov = &iov;
+		msg.msg_iovlen = 1;
+		msg.msg_control = buf;
+		msg.msg_controllen = sizeof(buf);
+		cmsghdr *c = CMSG_FIRSTHDR(&msg);
+		c->cmsg_level = SOL_SOCKET;
+		c->cmsg_type = SCM_RIGHTS;
+		c->cmsg_len = CMSG_LEN(sizeof(int));
+		const int fd = int(listener);
+		std::memcpy(CMSG_DATA(c), &fd, sizeof(int));
+		CHILD_TRY(STEP_SEND, sys(SYS_sendmsg, 3, long(&msg), 0));
+	}
+	sys(SYS_close, listener);
+	// the program gets an empty signal mask (the host's thread may block some), as from a shell
+	const uint64_t none = 0;
+	sys(SYS_rt_sigprocmask, SIG_SETMASK, long(&none), 0, 8);
+	r = sys(SYS_execve, long(p.exec_path), long(p.argv), long(p.envp));
+	child_fail(3, STEP_EXEC, r); // the kernel does not run it: no AArch32 support (ENOEXEC), say
+#undef CHILD_TRY
+}
+
+const char *child_step_name(int step)
+{
+	static const char *const names[] = { "", "dup the socket", "close_range", "setsid", "unshare the mount namespace", "make mounts private",
+		"mount the tmpfs", "make a directory", "write a file", "create a mount point", "bind a set file", "make a set file read-only",
+		"bind /data", "chdir", "setgroups", "setresgid", "setresuid", "dumpable", "unshare the user namespace", "write the id maps",
+		"chroot", "sched_setaffinity", "no_new_privs", "seccomp", "send the listener", "execve" };
+	return step > 0 && size_t(step) < sizeof(names) / sizeof(names[0]) ? names[step] : "set up";
+}
+
+// The host file the bytes at data are mapped from, as a whole from its start; empty when they are not
+std::string mapped_file(const uint8_t *data, size_t size)
+{
+	std::ifstream maps("/proc/self/maps");
+	std::string line;
+	const uintptr_t p = uintptr_t(data);
+	while (std::getline(maps, line)) {
+		unsigned long long start, end, offset;
+		char perms[8];
+		int path_at = -1;
+		if (std::sscanf(line.c_str(), "%llx-%llx %7s %llx %*s %*s %n", &start, &end, perms, &offset, &path_at) < 4 || path_at < 0) continue;
+		if (p < start || p >= end) continue;
+		const std::string path = line.substr(size_t(path_at));
+		if (path.empty() || path[0] != '/' || offset + (p - start) != 0) return {};
+		struct stat st;
+		if (path.find(" (deleted)") != std::string::npos || stat(path.c_str(), &st) < 0 || uint64_t(st.st_size) != size) return {};
+		return path;
+	}
+	return {};
+}
+
+bool parse_cpus(const std::string &list, cpu_set_t &set)
+{
+	CPU_ZERO(&set);
+	bool any = false;
+	for (const char *p = list.c_str(); *p; ) {
+		char *end;
+		const long a = std::strtol(p, &end, 10);
+		if (end == p) return false;
+		long b = a;
+		if (*end == '-') b = std::strtol(end + 1, &end, 10);
+		for (long c = a; c <= b && c < CPU_SETSIZE; c++) { CPU_SET(int(c), &set); any = true; }
+		p = *end == ',' ? end + 1 : end;
+		if (*end && *end != ',') return false;
+	}
+	return any;
+}
+
+} // anonymous namespace
+
+// ---------------------------------------------------------------- the machine
+spike1_native::spike1_native() : m_dev(m_mem) {}
+spike1_native::~spike1_native() { stop(); }
+
+bool spike1_native::supported(std::string &why)
+{
+	if (geteuid() != 0) { why = "needs root (a mount namespace and a chroot for the game)"; return false; }
+	return true;
+}
+
+uint64_t spike1_native::now_ns() const { return m_t0 ? mono_ns() - m_t0 : 0; }
+
+void spike1_native::log(const std::string &line) const
+{
+	if (!m_cfg.log) return;
+	char t[32];
+	std::snprintf(t, sizeof(t), "[%10.6f] ", double(now_ns()) / 1e9);
+	m_cfg.log(t + line);
+}
+
+uint32_t spike1_native::symbol(const std::string &name) const
+{
+	auto it = m_symbols.find(name);
+	return it == m_symbols.end() ? 0 : it->second;
+}
+
+bool spike1_native::start(const config &cfg, std::string &error)
+{
+	stop();
+	m_cfg = cfg;
+	if (!supported(error)) return false;
+	const file *program = nullptr;
+	for (const file &f : m_cfg.files) if (f.name == "game") program = &f;
+	if (!program || program->size < 52) { error = "the set has no game program"; return false; }
+
+	// the program's symbol table, as spike1_linux::load_elf reads it: objects and functions
+	m_symbols.clear();
+	m_symbol_sizes.clear();
+	{
+		const uint8_t *elf = program->data;
+		const size_t size = program->size;
+		auto u32 = [&](size_t o) { uint32_t v = 0; if (o + 4 <= size) std::memcpy(&v, elf + o, 4); return v; };
+		auto u16 = [&](size_t o) { uint16_t v = 0; if (o + 2 <= size) std::memcpy(&v, elf + o, 2); return v; };
+		if (std::memcmp(elf, "\x7f" "ELF\x01\x01", 6) != 0 || u16(18) != 40) { error = "the game program is not a 32-bit ARM ELF file"; return false; }
+		const uint32_t shoff = u32(32);
+		const uint16_t shentsize = u16(46), shnum = u16(48);
+		for (uint32_t i = 0; i < shnum && shoff + uint64_t(i + 1) * shentsize <= size; i++) {
+			const size_t o = shoff + size_t(i) * shentsize;
+			if (u32(o + 4) != 2) continue; // SHT_SYMTAB
+			const uint32_t symoff = u32(o + 16), symsize = u32(o + 20), link = u32(o + 24);
+			if (link >= shnum) break;
+			const uint32_t stroff = u32(shoff + size_t(link) * shentsize + 16);
+			for (uint64_t s = symoff; s + 16 <= uint64_t(symoff) + symsize && s + 16 <= size; s += 16) {
+				const uint32_t name = u32(size_t(s)), value = u32(size_t(s) + 4);
+				const uint8_t type = elf[size_t(s) + 12] & 15;
+				if (!value || (type != 1 && type != 2) || uint64_t(stroff) + name >= size) continue;
+				const char *n = reinterpret_cast<const char *>(elf + stroff + name);
+				m_symbols.emplace(std::string(n, strnlen(n, size - stroff - name)), value);
+				m_symbol_sizes.emplace(std::string(n, strnlen(n, size - stroff - name)), u32(size_t(s) + 8));
+			}
+		}
+	}
+	for (const auto &s : m_cfg.symbols) { m_symbols[s.name] = s.address; m_symbol_sizes[s.name] = s.size; }
+	m_game_files.clear();
+	for (const file &f : m_cfg.files) m_game_files.push_back(f.name);
+
+	// our directory: root/ for the sandbox's tmpfs, data/ for /data, filled from the NVRAM block
+	char tmpl[] = "/tmp/spike1native.XXXXXX";
+	if (!mkdtemp(tmpl)) { error = std::string("mkdtemp: ") + std::strerror(errno); return false; }
+	m_dir = tmpl;
+	chmod(m_dir.c_str(), 0755);
+	mkdir((m_dir + "/root").c_str(), 0755);
+	mkdir((m_dir + "/data").c_str(), 0755);
+	if (chown((m_dir + "/data").c_str(), NOBODY, NOBODY) < 0) { error = std::string("chown: ") + std::strerror(errno); stop(); return false; }
+	std::vector<uint8_t> eeproms;
+	{
+		const std::vector<uint8_t> &b = m_cfg.nvram;
+		spike1_vfs vfs;
+		bool ok = b.size() >= 5 && std::memcmp(b.data(), "S1ST", 4) == 0 && b[4] == 1;
+		size_t p = 5;
+		std::vector<std::pair<size_t, size_t>> parts;
+		for (int i = 0; ok && i < 2; i++) {
+			if (b.size() - p < 4) { ok = false; break; }
+			const size_t n = b[p] | (b[p + 1] << 8) | (b[p + 2] << 16) | (size_t(b[p + 3]) << 24);
+			p += 4;
+			if (b.size() - p < n) { ok = false; break; }
+			parts.push_back({ p, n });
+			p += n;
+		}
+		if (ok) ok = vfs.load(b.data() + parts[0].first, parts[0].second);
+		if (ok) {
+			eeproms.assign(b.begin() + long(parts[1].first), b.begin() + long(parts[1].first + parts[1].second));
+			auto host = [&](const std::string &guest) { return m_dir + guest; };
+			for (const std::string &d : vfs.written_directories())
+				if (d.rfind("/data/", 0) == 0) { mkdir(host(d).c_str(), 0755); chown(host(d).c_str(), NOBODY, NOBODY); }
+			for (const auto &w : vfs.written_files()) {
+				if (w.first.rfind("/data/", 0) != 0) continue;
+				std::ofstream out(host(w.first), std::ios::binary);
+				out.write(reinterpret_cast<const char *>(w.second->data()), std::streamsize(w.second->size()));
+				out.close();
+				chown(host(w.first).c_str(), NOBODY, NOBODY);
+			}
+		} else if (!b.empty())
+			log("nvram: the saved block is not a Spike 1 NVRAM block; starting with a new machine");
+	}
+
+	m_t0 = mono_ns();
+	if (!spawn(error)) { stop(); return false; }
+	start_devices();
+	if (!eeproms.empty()) m_dev.set_nvram(eeproms.data(), eeproms.size());
+	m_mem.flush();
+	return true;
+}
+
+// Starts the program, held at its first system call
+bool spike1_native::spawn(std::string &error)
+{
+	const std::string root = m_dir + "/root", games = root + "/games/" + m_cfg.folder;
+	std::vector<std::string> strings; // the plan's text, alive until the child has gone or exec'd
+	strings.reserve(4 * m_cfg.files.size() + 16);
+	auto keep = [&](const std::string &s) { strings.push_back(s); return strings.back().c_str(); };
+	std::vector<child_plan::dir> dirs;
+	std::vector<child_plan::wfile> files;
+	std::vector<child_plan::bind> binds;
+	bool video = false;
+	for (const file &f : m_cfg.files) if (f.name.size() > 4 && f.name.compare(f.name.size() - 4, 4, ".spv") == 0) video = true;
+	dirs.push_back({ keep(root + "/games"), 0755 });
+	dirs.push_back({ keep(games), 0755 });
+	if (video) dirs.push_back({ keep(games + "/video"), 0755 });
+	dirs.push_back({ keep(root + "/data"), 0755 });
+	dirs.push_back({ keep(root + "/tmp"), 01777 });
+	dirs.push_back({ keep(root + "/dev"), 0755 });
+	for (const file &f : m_cfg.files) {
+		const bool clip = f.name.size() > 4 && f.name.compare(f.name.size() - 4, 4, ".spv") == 0;
+		const std::string to = games + (clip ? "/video/" : "/") + f.name;
+		const std::string from = f.name == "game" ? std::string() : mapped_file(f.data, f.size);
+		if (!from.empty()) binds.push_back({ keep(from), keep(to) });
+		else if (f.size <= SMALL_FILE || f.name == "game") files.push_back({ keep(to), f.data, f.size, mode_t(f.name == "game" ? 0755 : 0444) });
+		else { error = f.name + " is not a whole file on disk (a set in a zip?), which a native run needs"; return false; }
+	}
+	const std::string exec_path = "/games/" + m_cfg.folder + "/game";
+	std::vector<char *> argv{ const_cast<char *>(keep(exec_path)), nullptr };
+	std::vector<std::string> env = m_cfg.environment;
+	if (env.empty()) env = { "HOME=/root", "PATH=/bin:/usr/bin:/usr/local/bin", "LANG=C", "LC_ALL=C", "GAMES_PATH=/games" };
+	std::vector<char *> envp;
+	for (const auto &e : env) envp.push_back(const_cast<char *>(keep(e)));
+	envp.push_back(nullptr);
+	std::vector<sock_filter> filter = build_filter();
+
+	child_plan plan;
+	plan.dirs = dirs.data(); plan.ndirs = dirs.size();
+	plan.files = files.data(); plan.nfiles = files.size();
+	plan.binds = binds.data(); plan.nbinds = binds.size();
+	plan.root = keep(root);
+	size_t written = 0;
+	for (const auto &f : files) written += f.size;
+	plan.tmpfs_options = keep("size=" + std::to_string((written >> 20) + 16) + "m,mode=755");
+	plan.data_src = keep(m_dir + "/data");
+	plan.data_dst = keep(root + "/data");
+	plan.uid_map = keep("0 " + std::to_string(NOBODY) + " 1");
+	plan.gid_map = keep("0 " + std::to_string(NOBODY) + " 1");
+	plan.set_cpus = !m_cfg.cpus.empty() && parse_cpus(m_cfg.cpus, plan.cpus);
+	plan.prog = sock_fprog{ uint16_t(filter.size()), filter.data() };
+	plan.exec_path = keep(exec_path);
+	plan.argv = argv.data();
+	plan.envp = envp.data();
+
+	int sv[2];
+	if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sv) < 0) { error = std::string("socketpair: ") + std::strerror(errno); return false; }
+	plan.sock = sv[1];
+	const size_t stack_size = 256 * 1024;
+	void *stack = mmap(nullptr, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
+	if (stack == MAP_FAILED) { close(sv[0]); close(sv[1]); error = "no memory for the child's stack"; return false; }
+	// no handler of the host may run on the child's stack before the exec
+	sigset_t all, old;
+	sigfillset(&all);
+	pthread_sigmask(SIG_SETMASK, &all, &old);
+	int pidfd = -1;
+	const int pid = clone(child_entry, static_cast<char *>(stack) + stack_size, CLONE_VM | CLONE_VFORK | CLONE_PIDFD | SIGCHLD, &plan, &pidfd);
+	const int clone_errno = errno;
+	pthread_sigmask(SIG_SETMASK, &old, nullptr);
+	munmap(stack, stack_size);
+	close(sv[1]);
+	if (pid < 0) { close(sv[0]); error = std::string("clone: ") + std::strerror(clone_errno); return false; }
+	m_child = pid;
+	m_pidfd = pidfd;
+
+	// the child's report: the listener, or the step that failed
+	child_report rep{ -1, 0 };
+	iovec iov{ &rep, sizeof(rep) };
+	alignas(cmsghdr) char buf[CMSG_SPACE(sizeof(int))] = {};
+	msghdr msg{};
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = buf;
+	msg.msg_controllen = sizeof(buf);
+	const ssize_t got = recvmsg(sv[0], &msg, MSG_CMSG_CLOEXEC);
+	int listener = -1;
+	if (got == ssize_t(sizeof(rep)) && rep.step == 0)
+		if (cmsghdr *c = CMSG_FIRSTHDR(&msg); c && c->cmsg_type == SCM_RIGHTS) std::memcpy(&listener, CMSG_DATA(c), sizeof(int));
+	// a failed exec reports after the listener: look for that too
+	child_report late{ -1, 0 };
+	if (listener >= 0) {
+		pollfd p{ sv[0], POLLIN, 0 };
+		if (poll(&p, 1, 0) > 0 && recv(sv[0], &late, sizeof(late), MSG_DONTWAIT) == ssize_t(sizeof(late))) rep = late;
+	}
+	close(sv[0]);
+	if (listener < 0 || rep.step != 0) {
+		if (listener >= 0) close(listener);
+		error = got == ssize_t(sizeof(rep)) && rep.step > 0 ?
+			std::string("the sandbox: ") + child_step_name(rep.step) + ": " + std::strerror(rep.err) : "the sandbox did not start";
+		reap("did not start");
+		return false;
+	}
+	m_listener = listener;
+	m_exited = false;
+	if (m_notif_buf.empty()) {
+		seccomp_notif_sizes sizes{};
+		syscall(SYS_seccomp, SECCOMP_GET_NOTIF_SIZES, 0, &sizes);
+		m_notif_buf.resize(std::max<size_t>(sizes.seccomp_notif, sizeof(seccomp_notif)));
+	}
+	if (!wait_for_hold(5000000000ull)) {
+		error = "the game program did not start (" + (m_stop_reason.empty() ? std::string("no first system call within 5 s") : m_stop_reason) + ")";
+		kill_child();
+		return false;
+	}
+	for (const auto &l : m_links) make_link(l.first, l.second);
+	log("the program runs natively as process " + std::to_string(m_child) + (plan.set_cpus ? " on cpus " + m_cfg.cpus : std::string()) +
+		": " + std::to_string(binds.size()) + " files bound from disk, " + std::to_string(files.size()) + " written");
+	return true;
+}
+
+// Waits for the program's first system call, which it then holds
+bool spike1_native::wait_for_hold(uint64_t max_ns)
+{
+	const uint64_t until = mono_ns() + max_ns;
+	while (!m_held) {
+		const uint64_t now = mono_ns();
+		if (now >= until || m_exited) return false;
+		pollfd p[2] = { { m_listener, POLLIN, 0 }, { m_pidfd, POLLIN, 0 } };
+		const uint64_t wait = until - now;
+		timespec ts{ time_t(wait / 1000000000ull), long(wait % 1000000000ull) };
+		if (ppoll(p, 2, &ts, nullptr) < 0 && errno != EINTR) return false;
+		if (p[0].revents & POLLIN) {
+			std::fill(m_notif_buf.begin(), m_notif_buf.end(), 0);
+			if (ioctl(m_listener, SECCOMP_IOCTL_NOTIF_RECV, m_notif_buf.data()) < 0) continue;
+			const seccomp_notif &n = *reinterpret_cast<const seccomp_notif *>(m_notif_buf.data());
+			call c;
+			c.id = n.id;
+			c.pid = int(n.pid);
+			c.nr = n.data.nr;
+			for (int i = 0; i < 6; i++) c.a[i] = uint32_t(n.data.args[i]);
+			m_held = true;
+			m_held_call = c;
+			return true;
+		}
+		if (p[1].revents & POLLIN) { reap("exited before its first system call"); return false; }
+	}
+	return true;
+}
+
+void spike1_native::release()
+{
+	if (!m_held) return;
+	m_held = false;
+	call c = m_held_call;
+	int64_t val = 0;
+	const outcome o = handle(c, val);
+	if (o == outcome::wait) m_pending.push_back(c);
+	else respond(c, o, val);
+}
+
+void spike1_native::start_devices()
+{
 	m_mem.set_remote(m_child);
+	if (m_devices_started) return;
+	m_devices_started = true;
 	spike1_devices::config cfg;
-	cfg.trace = m_opt.trace;
+	cfg.trace = m_cfg.trace;
 	cfg.log = [this](const std::string &line) { log(line); };
 	cfg.symbol = [this](const std::string &n) { auto it = m_symbols.find(n); return it == m_symbols.end() ? 0u : it->second; };
 	cfg.symbol_size = [this](const std::string &n) { auto it = m_symbol_sizes.find(n); return it == m_symbol_sizes.end() ? 0u : it->second; };
@@ -369,37 +594,226 @@ void supervisor::start_devices()
 		for (auto it = m_symbols.lower_bound(prefix); it != m_symbols.end() && it->first.compare(0, prefix.size(), prefix) == 0; ++it) names.push_back(it->first);
 		return names;
 	};
-	cfg.game_files = [this]() { return m_set_files; };
+	cfg.game_files = [this]() { return m_game_files; };
 	cfg.read_game_file = [this](const std::string &name, std::vector<uint8_t> &out) {
-		std::ifstream in(m_opt.files + "/" + name, std::ios::binary);
-		if (!in) return false;
-		out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-		return true;
+		for (const file &f : m_cfg.files)
+			if (f.name == name) { out.assign(f.data, f.data + f.size); return true; }
+		return false;
 	};
 	m_dev.start(cfg);
-	for (const auto &m : m_opt.encoder_motors)
-		m_dev.link_encoder_motor(uint8_t(m.node), uint8_t(m.motor), int16_t(m.low), int16_t(m.high), uint16_t(m.counts_per_s));
-	std::ifstream nv(m_nvram_path, std::ios::binary);
-	std::vector<uint8_t> block((std::istreambuf_iterator<char>(nv)), std::istreambuf_iterator<char>());
-	if (!block.empty()) m_dev.set_nvram(block.data(), block.size());
 	m_mem.flush();
-	log("devices: " + std::to_string(m_dev.switches().size()) + " switches, " + std::to_string(m_dev.coils().size()) + " coils, " +
-		std::to_string(m_dev.leds().size()) + " LED channels" + (block.empty() ? "" : ", EEPROMs from " + m_nvram_path));
 }
 
-bool supervisor::child_read(pid_t pid, uint32_t addr, void *dst, size_t len)
+void spike1_native::make_link(const std::string &path, const std::string &target)
+{
+	if (!m_child || m_exited || path.empty() || path[0] != '/') return;
+	// through the program's own root, as the host's root
+	const std::string host = "/proc/" + std::to_string(m_child) + "/root" + path;
+	std::error_code ec;
+	std::filesystem::create_directories(std::filesystem::path(host).parent_path(), ec);
+	unlink(host.c_str());
+	if (symlink(target.c_str(), host.c_str()) < 0) log("link " + path + " -> " + target + ": " + std::strerror(errno));
+}
+
+bool spike1_native::add_link(const std::string &path, const std::string &target)
+{
+	m_links[path] = target;
+	make_link(path, target);
+	return true;
+}
+
+void spike1_native::kill_child()
+{
+	if (!m_child) return;
+	if (!m_exited) {
+		if (m_pidfd >= 0) syscall(SYS_pidfd_send_signal, m_pidfd, SIGKILL, nullptr, 0);
+		else kill(m_child, SIGKILL);
+	}
+	reap("stopped");
+}
+
+// The program is gone (or going): its descriptors, the calls it was making and its process
+void spike1_native::reap(const std::string &how)
+{
+	if (m_pidfd >= 0) {
+		siginfo_t info{};
+		if (syscall(SYS_waitid, P_PIDFD, m_pidfd, &info, WEXITED, nullptr) == 0) {
+			if (info.si_code == CLD_EXITED) m_stop_reason = how + ", exit status " + std::to_string(info.si_status);
+			else m_stop_reason = how + ", signal " + std::to_string(info.si_status);
+		} else
+			m_stop_reason = how;
+		close(m_pidfd);
+		m_pidfd = -1;
+	} else if (m_child)
+		waitpid(m_child, nullptr, 0);
+	if (m_listener >= 0) { close(m_listener); m_listener = -1; }
+	m_exited = true;
+	m_held = false;
+	m_pending.clear();
+	for (slot &s : m_slots) s = slot();
+}
+
+void spike1_native::stop()
+{
+	if (m_threaded) {
+		m_quit = true;
+		if (m_thread.joinable()) m_thread.join();
+		m_threaded = false;
+	}
+	if (m_child) kill_child();
+	m_child = 0;
+	m_exited = false;
+	m_restart_ns = 0;
+	if (!m_dir.empty()) {
+		std::error_code ec;
+		std::filesystem::remove_all(m_dir, ec);
+		m_dir.clear();
+	}
+	m_mem.set_remote(0);
+}
+
+bool spike1_native::running(std::string &reason) const
+{
+	if (!m_child) { reason = m_stop_reason.empty() ? "not started" : m_stop_reason; return false; }
+	if (m_exited && !m_restart_ns) { reason = m_stop_reason; return false; }
+	return true;
+}
+
+void spike1_native::run_until(uint64_t until_ns)
+{
+	if (!m_child) return;
+	{
+		std::lock_guard<std::mutex> guard(m_lock);
+		release();
+	}
+	do step(until_ns); while (m_child && now_ns() < until_ns);
+}
+
+void spike1_native::start_thread()
+{
+	if (!m_child || m_threaded) return;
+	{
+		std::lock_guard<std::mutex> guard(m_lock);
+		release();
+	}
+	m_quit = false;
+	m_threaded = true;
+	m_thread = std::thread([this]() { thread_main(); });
+}
+
+void spike1_native::thread_main()
+{
+	while (!m_quit && m_child) step(now_ns() + 20000000ull);
+}
+
+void spike1_native::step(uint64_t until_ns)
+{
+	if (!m_exited) { pump(until_ns); return; }
+	{
+		std::lock_guard<std::mutex> guard(m_lock);
+		if (!m_restart_ns) {
+			// game_monitor: the program again, a second later, as a new process; the devices carry on
+			m_dev.process_exited();
+			m_restart_ns = now_ns() + 1000000000ull;
+			log("exit: " + m_stop_reason + "; game_monitor starts the program again in 1 s");
+		}
+		if (now_ns() >= m_restart_ns) {
+			m_restart_ns = 0;
+			std::string error;
+			if (!spawn(error)) { m_stop_reason = "restart: " + error; log(m_stop_reason); m_child = 0; return; }
+			m_restarts++;
+			m_mem.set_remote(m_child);
+			m_dev.process_started();
+			m_mem.flush();
+			release();
+			return;
+		}
+	}
+	const uint64_t wake = std::min(until_ns, m_restart_ns), now = now_ns();
+	if (wake > now) { timespec ts{ time_t((wake - now) / 1000000000ull), long((wake - now) % 1000000000ull) }; nanosleep(&ts, nullptr); }
+}
+
+// One wait: for a call from the game, a waiting call's time, or until_ns
+bool spike1_native::pump(uint64_t until_ns)
+{
+	// the wait holds no lock: the host uses the machine meanwhile
+	uint64_t now = now_ns();
+	uint64_t next = until_ns;
+	{
+		std::lock_guard<std::mutex> guard(m_lock);
+		for (const call &c : m_pending) next = std::min(next, c.wake_ns);
+	}
+	const uint64_t wait = next > now ? next - now : 0;
+	timespec ts{ time_t(wait / 1000000000ull), long(wait % 1000000000ull) };
+	pollfd p[2] = { { m_listener, POLLIN, 0 }, { m_pidfd, POLLIN, 0 } };
+	if (ppoll(p, 2, &ts, nullptr) < 0 && errno != EINTR) return false;
+	std::lock_guard<std::mutex> guard(m_lock);
+	if (p[1].revents & POLLIN) { reap("exited"); return false; }
+	if (p[0].revents & (POLLHUP | POLLERR)) { reap("exited"); return false; }
+	// every call that came in
+	while (p[0].revents & POLLIN) {
+		std::fill(m_notif_buf.begin(), m_notif_buf.end(), 0);
+		if (ioctl(m_listener, SECCOMP_IOCTL_NOTIF_RECV, m_notif_buf.data()) < 0) break;
+		const seccomp_notif &n = *reinterpret_cast<const seccomp_notif *>(m_notif_buf.data());
+		call c;
+		c.id = n.id;
+		c.pid = int(n.pid);
+		c.nr = n.data.nr;
+		for (int i = 0; i < 6; i++) c.a[i] = uint32_t(n.data.args[i]);
+		m_notifications++;
+		m_counts[c.nr]++;
+		int64_t val = 0;
+		const outcome o = handle(c, val);
+		if (o == outcome::wait) m_pending.push_back(c);
+		else respond(c, o, val);
+		pollfd again{ m_listener, POLLIN, 0 };
+		p[0].revents = poll(&again, 1, 0) > 0 ? again.revents & POLLIN : 0;
+	}
+	// the calls waiting on a device whose time has come
+	now = now_ns();
+	for (size_t i = 0; i < m_pending.size(); ) {
+		call &c = m_pending[i];
+		if (c.wake_ns > now) { i++; continue; }
+		uint64_t id = c.id;
+		if (ioctl(m_listener, SECCOMP_IOCTL_NOTIF_ID_VALID, &id) < 0) { m_pending.erase(m_pending.begin() + long(i)); continue; } // a signal took the caller away
+		int64_t val = 0;
+		const outcome o = handle(c, val);
+		if (o == outcome::wait) { i++; continue; }
+		respond(c, o, val);
+		m_pending.erase(m_pending.begin() + long(i));
+	}
+	return true;
+}
+
+void spike1_native::respond(const call &c, outcome o, int64_t val)
+{
+	seccomp_notif_resp r{};
+	r.id = c.id;
+	if (o == outcome::pass) r.flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+	else if (val < 0) r.error = int32_t(val);
+	else r.val = val;
+	ioctl(m_listener, SECCOMP_IOCTL_NOTIF_SEND, &r); // ENOENT: the caller has gone (a signal), nothing to do
+}
+
+spike1_native::slot *spike1_native::device(int fd)
+{
+	const int i = fd - DEVICE_FD;
+	return i >= 0 && i < DEVICE_SLOTS && m_slots[i].used ? &m_slots[i] : nullptr;
+}
+
+bool spike1_native::child_read(int pid, uint32_t addr, void *dst, size_t len) const
 {
 	iovec local{ dst, len }, remote{ reinterpret_cast<void *>(uintptr_t(addr)), len };
-	return process_vm_readv(pid, &local, 1, &remote, 1, 0) == ssize_t(len);
+	return len == 0 || process_vm_readv(pid, &local, 1, &remote, 1, 0) == ssize_t(len);
 }
 
-bool supervisor::child_write(pid_t pid, uint32_t addr, const void *src, size_t len)
+bool spike1_native::child_write(int pid, uint32_t addr, const void *src, size_t len) const
 {
 	iovec local{ const_cast<void *>(src), len }, remote{ reinterpret_cast<void *>(uintptr_t(addr)), len };
-	return process_vm_writev(pid, &local, 1, &remote, 1, 0) == ssize_t(len);
+	return len == 0 || process_vm_writev(pid, &local, 1, &remote, 1, 0) == ssize_t(len);
 }
 
-bool supervisor::child_string(pid_t pid, uint32_t addr, std::string &out)
+bool spike1_native::child_string(int pid, uint32_t addr, std::string &out) const
 {
 	out.clear();
 	while (out.size() < 4096) {
@@ -415,11 +829,11 @@ bool supervisor::child_string(pid_t pid, uint32_t addr, std::string &out)
 	return false;
 }
 
-// Puts a descriptor of ours into the calling process (at `at`, or the lowest free one when -1)
-int supervisor::add_fd(const call &c, int src, int at, bool cloexec)
+// Puts a descriptor of ours into the calling process: at `at`, or the lowest free one when -1
+int spike1_native::add_fd(const call &c, int src, int at, bool cloexec)
 {
 	seccomp_notif_addfd a{};
-	a.id = c.n.id;
+	a.id = c.id;
 	a.srcfd = uint32_t(src);
 	if (at >= 0) { a.flags = SECCOMP_ADDFD_FLAG_SETFD; a.newfd = uint32_t(at); }
 	a.newfd_flags = cloexec ? O_CLOEXEC : 0;
@@ -428,24 +842,23 @@ int supervisor::add_fd(const call &c, int src, int at, bool cloexec)
 }
 
 // What poll() would say now of one of the game's own descriptors
-short supervisor::native_revents(int fd, short events)
+short spike1_native::native_revents(int fd, short events)
 {
-	if (m_pidfd < 0) m_pidfd = int(syscall(SYS_pidfd_open, m_child, 0));
 	const int dup = m_pidfd < 0 ? -1 : int(syscall(SYS_pidfd_getfd, m_pidfd, fd, 0));
 	if (dup < 0) return POLLNVAL;
 	pollfd p{ dup, events, 0 };
-	::poll(&p, 1, 0);
+	poll(&p, 1, 0);
 	close(dup);
 	return p.revents;
 }
 
-supervisor::outcome supervisor::open_call(call &c, int64_t &val)
+spike1_native::outcome spike1_native::open_call(call &c, int64_t &val)
 {
-	const bool at = c.n.data.nr == nr::openat;
-	const uint32_t addr = uint32_t(c.n.data.args[at ? 1 : 0]), flags = uint32_t(c.n.data.args[at ? 2 : 1]);
+	const bool at = c.nr == nr::openat;
+	const uint32_t addr = c.a[at ? 1 : 0], flags = c.a[at ? 2 : 1];
 	std::string path;
-	if (!child_string(pid_t(c.n.pid), addr, path)) { val = -EFAULT; return outcome::reply; }
-	if (path.rfind("/dev/", 0) != 0) return outcome::pass; // the chroot has the title's files
+	if (!child_string(c.pid, addr, path)) { val = -EFAULT; return outcome::reply; }
+	if (path.rfind("/dev/", 0) != 0) return outcome::pass; // the sandbox has the title's files
 	const bool cloexec = (flags & O_CLOEXEC_) != 0;
 	if (path == "/dev/null" || path == "/dev/zero" || path == "/dev/random" || path == "/dev/urandom") {
 		const int h = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
@@ -453,7 +866,7 @@ supervisor::outcome supervisor::open_call(call &c, int64_t &val)
 		if (h >= 0) close(h);
 		return outcome::reply;
 	}
-	if (path == "/dev/console" || path == "/dev/tty") { // the game's console: our output
+	if (path == "/dev/console" || path == "/dev/tty") { // the game's console: the host's output
 		val = add_fd(c, 1, -1, cloexec);
 		return outcome::reply;
 	}
@@ -464,25 +877,21 @@ supervisor::outcome supervisor::open_call(call &c, int64_t &val)
 	val = h < 0 ? -errno : add_fd(c, h, DEVICE_FD + i, cloexec);
 	if (h >= 0) close(h);
 	if (val < 0) return outcome::reply;
-	if (!m_started) start_devices();
 	slot &s = m_slots[i];
 	s = slot();
 	s.used = true;
 	s.flags = flags;
 	s.h.type = spike1_devices::kind_for_path(path);
 	s.h.path = path;
-	log("open device " + path + " -> fd " + std::to_string(val));
+	if (m_cfg.trace) log("open device " + path + " -> fd " + std::to_string(val));
 	return outcome::reply;
 }
 
 // select and poll: answered here when they wait on a device, as spike1_linux::sys_poll does
-supervisor::outcome supervisor::poll_call(call &c, int64_t &val)
+spike1_native::outcome spike1_native::poll_call(call &c, int64_t &val)
 {
-	const uint32_t n = c.n.data.nr;
-	uint32_t a[6];
-	for (int i = 0; i < 6; i++) a[i] = uint32_t(c.n.data.args[i]);
-	const pid_t pid = pid_t(c.n.pid);
-	const bool is_poll = n == nr::poll || n == nr::ppoll;
+	const uint32_t *a = c.a;
+	const bool is_poll = c.nr == nr::poll || c.nr == nr::ppoll;
 	const uint64_t now = now_ns();
 
 	std::vector<uint8_t> pfds;
@@ -490,26 +899,26 @@ supervisor::outcome supervisor::poll_call(call &c, int64_t &val)
 	bool any_device = false;
 	if (is_poll) {
 		pfds.resize(size_t(a[1]) * 8);
-		if (!pfds.empty() && !child_read(pid, a[0], pfds.data(), pfds.size())) { val = -EFAULT; return outcome::reply; }
+		if (!child_read(c.pid, a[0], pfds.data(), pfds.size())) { val = -EFAULT; return outcome::reply; }
 		for (uint32_t i = 0; i < a[1]; i++) { int32_t fd; std::memcpy(&fd, &pfds[8 * i], 4); if (device(fd)) any_device = true; }
 	} else {
 		const uint32_t words = (a[0] + 31) / 32;
 		in_r.assign(words, 0); in_w.assign(words, 0); out_r.assign(words, 0); out_w.assign(words, 0);
-		if (a[1] && !child_read(pid, a[1], in_r.data(), words * 4)) { val = -EFAULT; return outcome::reply; }
-		if (a[2] && !child_read(pid, a[2], in_w.data(), words * 4)) { val = -EFAULT; return outcome::reply; }
+		if (a[1] && !child_read(c.pid, a[1], in_r.data(), words * 4)) { val = -EFAULT; return outcome::reply; }
+		if (a[2] && !child_read(c.pid, a[2], in_w.data(), words * 4)) { val = -EFAULT; return outcome::reply; }
 		for (uint32_t fd = 0; fd < a[0]; fd++)
 			if (((in_r[fd / 32] | in_w[fd / 32]) >> (fd & 31) & 1) && device(int(fd))) any_device = true;
 	}
 	if (!any_device) return outcome::pass;
 
 	int64_t timeout_ns = -1;
-	if (n == nr::poll) { if (int32_t(a[2]) >= 0) timeout_ns = int64_t(int32_t(a[2])) * 1000000; }
+	if (c.nr == nr::poll) { if (int32_t(a[2]) >= 0) timeout_ns = int64_t(int32_t(a[2])) * 1000000; }
 	else {
-		const uint32_t ptr = n == nr::ppoll ? a[2] : a[4];
+		const uint32_t ptr = c.nr == nr::ppoll ? a[2] : a[4];
 		uint32_t t[2];
 		if (ptr) {
-			if (!child_read(pid, ptr, t, 8)) { val = -EFAULT; return outcome::reply; }
-			timeout_ns = int64_t(t[0]) * 1000000000 + int64_t(t[1]) * (n == nr::newselect ? 1000 : 1); // timeval, or timespec
+			if (!child_read(c.pid, ptr, t, 8)) { val = -EFAULT; return outcome::reply; }
+			timeout_ns = int64_t(t[0]) * 1000000000 + int64_t(t[1]) * (c.nr == nr::newselect ? 1000 : 1); // timeval, or timespec
 		}
 	}
 	uint64_t look_again = UINT64_MAX;
@@ -546,13 +955,13 @@ supervisor::outcome supervisor::poll_call(call &c, int64_t &val)
 	}
 	if (!c.poll_deadline) c.poll_deadline = timeout_ns < 0 ? UINT64_MAX : now + uint64_t(timeout_ns);
 	if (ready || timeout_ns == 0 || now >= c.poll_deadline) {
-		if (is_poll) child_write(pid, a[0], pfds.data(), pfds.size());
+		if (is_poll) child_write(c.pid, a[0], pfds.data(), pfds.size());
 		else {
 			const uint32_t bytes = uint32_t(out_r.size() * 4);
 			std::vector<uint32_t> none(out_r.size(), 0);
-			if (a[1]) child_write(pid, a[1], out_r.data(), bytes);
-			if (a[2]) child_write(pid, a[2], out_w.data(), bytes);
-			if (a[3]) child_write(pid, a[3], none.data(), bytes);
+			if (a[1]) child_write(c.pid, a[1], out_r.data(), bytes);
+			if (a[2]) child_write(c.pid, a[2], out_w.data(), bytes);
+			if (a[3]) child_write(c.pid, a[3], none.data(), bytes);
 		}
 		val = ready;
 		return outcome::reply;
@@ -561,24 +970,27 @@ supervisor::outcome supervisor::poll_call(call &c, int64_t &val)
 	return outcome::wait;
 }
 
-supervisor::outcome supervisor::handle(call &c, int64_t &val)
+spike1_native::outcome spike1_native::handle(call &c, int64_t &val)
 {
-	const uint32_t n = c.n.data.nr;
-	const int fd = int(int32_t(uint32_t(c.n.data.args[0])));
-	const uint32_t a1 = uint32_t(c.n.data.args[1]), a2 = uint32_t(c.n.data.args[2]);
-	switch (n) {
+	const int fd = int(int32_t(c.a[0]));
+	const uint32_t a1 = c.a[1], a2 = c.a[2];
+	switch (c.nr) {
 	case nr::open: case nr::openat: return open_call(c, val);
 	case nr::newselect: case nr::pselect6: case nr::poll: case nr::ppoll: return poll_call(c, val);
 	case nr::sync: case nr::syncfs: case nr::fsync: case nr::fdatasync: m_syncs++; return outcome::pass;
+	case nr::set_tid_address: case nr::uname: return outcome::pass;
 	default: break;
 	}
 	slot *s = device(fd);
-	if (!s) return outcome::pass; // a device descriptor the game did not get from us (dup2 onto one)
+	if (!s) return outcome::pass; // a descriptor in the device range the game made itself (dup2)
 	const uint64_t now = now_ns();
 	uint64_t wait_ns = 0;
 	std::string note;
 	int32_t r = 0;
-	switch (n) {
+	auto report = [&](const char *what) {
+		if (!note.empty()) log(std::string(what) + " " + s->h.path + ": " + note);
+	};
+	switch (c.nr) {
 	case nr::close:
 		s->used = false;
 		return outcome::pass; // closes the placeholder
@@ -589,7 +1001,7 @@ supervisor::outcome supervisor::handle(call &c, int64_t &val)
 		if (!a2) { val = 0; return outcome::reply; }
 		r = m_dev.read(s->h, a1, a2, now, wait_ns, note);
 		m_mem.flush();
-		if (!note.empty()) log("read fd " + std::to_string(fd) + ": " + note);
+		report("read");
 		if (r == spike1_devices::WAIT || r == 0) { // no data yet: a blocking read waits for it
 			if (s->flags & O_NONBLOCK_) { val = -EAGAIN; return outcome::reply; }
 			c.wake_ns = r == 0 ? now + RECHECK_NS : wait_ns;
@@ -600,7 +1012,7 @@ supervisor::outcome supervisor::handle(call &c, int64_t &val)
 	case nr::write:
 		r = m_dev.write(s->h, a1, a2, now, wait_ns, note);
 		m_mem.flush();
-		if (!note.empty()) log("write fd " + std::to_string(fd) + ": " + note);
+		report("write");
 		if (r == spike1_devices::WAIT) {
 			if (s->flags & O_NONBLOCK_) { val = -EAGAIN; return outcome::reply; }
 			c.wake_ns = wait_ns;
@@ -611,51 +1023,81 @@ supervisor::outcome supervisor::handle(call &c, int64_t &val)
 	case nr::ioctl:
 		if (a1 == 0x541b) { // FIONREAD
 			const uint32_t zero = 0;
-			val = child_write(pid_t(c.n.pid), a2, &zero, 4) ? 0 : -EFAULT;
+			val = child_write(c.pid, a2, &zero, 4) ? 0 : -EFAULT;
 			return outcome::reply;
 		}
 		r = m_dev.ioctl(s->h, a1, a2, now, wait_ns, note);
 		m_mem.flush();
-		if (!note.empty()) log("ioctl fd " + std::to_string(fd) + ": " + note);
+		report("ioctl");
 		if (r == spike1_devices::WAIT) { c.wake_ns = wait_ns; return outcome::wait; }
 		val = r;
 		return outcome::reply;
 	default:
-		log("not modelled on a device: system call " + std::to_string(n) + " on fd " + std::to_string(fd));
+		log("not modelled on a device: system call " + std::to_string(c.nr) + " on " + s->h.path);
 		val = -EINVAL;
 		return outcome::reply;
 	}
 }
 
-void supervisor::respond(const call &c, outcome o, int64_t val)
+bool spike1_native::power_down(uint64_t max_ns)
 {
-	seccomp_notif_resp r{};
-	r.id = c.n.id;
-	if (o == outcome::pass) r.flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
-	else if (val < 0) r.error = int32_t(val);
-	else r.val = val;
-	ioctl(m_listener, SECCOMP_IOCTL_NOTIF_SEND, &r); // ENOENT: the caller has gone (a signal), nothing to do
-}
-
-void supervisor::print_dmd()
-{
-	static const char shades[] = " .,:;-=+*%#&$@@@";
-	const uint8_t *dots = m_dev.dmd_frame();
-	std::printf("DMD at %.3f s, frame %llu\n", double(now_ns()) / 1e9, (unsigned long long)m_dev.dmd_frame_count());
-	for (uint32_t y = 0; y < spike1_devices::DMD_HEIGHT; y++) {
-		char line[spike1_devices::DMD_WIDTH + 3];
-		line[0] = '|';
-		for (uint32_t x = 0; x < spike1_devices::DMD_WIDTH; x++) line[1 + x] = shades[dots[y * spike1_devices::DMD_WIDTH + x] & 15];
-		line[spike1_devices::DMD_WIDTH + 1] = '|';
-		line[spike1_devices::DMD_WIDTH + 2] = 0;
-		std::printf("%s\n", line);
+	uint64_t syncs;
+	{
+		std::lock_guard<std::mutex> guard(m_lock);
+		if (!m_child || m_exited) return false;
+		release();
+		m_dev.power_off();
+		syncs = m_syncs;
 	}
-	std::fflush(stdout);
+	const uint64_t until = now_ns() + max_ns;
+	for (;;) {
+		{
+			std::lock_guard<std::mutex> guard(m_lock);
+			if (m_syncs != syncs || m_exited || now_ns() >= until) break;
+		}
+		if (m_threaded) { timespec ts{ 0, 2000000 }; nanosleep(&ts, nullptr); } // the thread answers the game
+		else pump(std::min<uint64_t>(until, now_ns() + 10000000ull));
+	}
+	std::lock_guard<std::mutex> guard(m_lock);
+	const bool synced = m_syncs != syncs;
+	log(synced ? "nvram: the game committed and synced after the power failed" : "nvram: the game did not sync after the power failed");
+	return synced;
 }
 
-// The game's CPU time so far (all its threads), from /proc
-bool supervisor::child_cpu(double &seconds, unsigned &threads) const
+std::vector<uint8_t> spike1_native::nvram() const
 {
+	// /data as spike1_vfs's written layer, then the EEPROMs, in spike1_linux::nvram()'s block
+	spike1_vfs vfs;
+	vfs.add_directory("/data");
+	if (!m_dir.empty()) {
+		std::error_code ec;
+		std::vector<std::filesystem::path> dirs, files;
+		const std::filesystem::path base = m_dir + "/data";
+		for (auto it = std::filesystem::recursive_directory_iterator(base, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+			if (it->is_directory(ec)) dirs.push_back(it->path());
+			else if (it->is_regular_file(ec)) files.push_back(it->path());
+		}
+		std::sort(dirs.begin(), dirs.end());
+		auto guest = [&](const std::filesystem::path &p) { return "/data/" + p.lexically_relative(base).generic_string(); };
+		for (const auto &d : dirs) vfs.make_directory(guest(d));
+		for (const auto &f : files) {
+			auto bytes = vfs.open_write(guest(f), true);
+			if (!bytes) continue;
+			std::ifstream in(f, std::ios::binary);
+			bytes->assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+	}
+	std::vector<uint8_t> out{ 'S', '1', 'S', 'T', 1 };
+	for (const std::vector<uint8_t> &part : { vfs.save(), m_dev.nvram() }) {
+		for (int i = 0; i < 4; i++) out.push_back(uint8_t(uint32_t(part.size()) >> (8 * i)));
+		out.insert(out.end(), part.begin(), part.end());
+	}
+	return out;
+}
+
+bool spike1_native::game_cpu(double &seconds, unsigned &threads) const
+{
+	if (!m_child || m_exited) return false;
 	std::ifstream in("/proc/" + std::to_string(m_child) + "/stat");
 	std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 	const size_t p = s.rfind(')');
@@ -673,214 +1115,21 @@ bool supervisor::child_cpu(double &seconds, unsigned &threads) const
 	return true;
 }
 
-void supervisor::tick(uint64_t now)
-{
-	if (!m_started) return;
-	const double now_s = double(now) / 1e9;
-	for (auto &p : m_opt.presses) {
-		const auto *s = m_dev.find_switch(p.name);
-		if (!s) continue;
-		if (!p.down && now_s >= p.at) {
-			p.down = true;
-			m_dev.set_switch(s->node, s->position, !m_dev.switch_closed(s->node, s->position), now);
-			log("switch " + s->name + (m_dev.switch_closed(s->node, s->position) ? " closed" : " opened"));
-		} else if (p.down && !p.up && now_s >= p.at + p.held_ms / 1000.0) {
-			p.up = true;
-			m_dev.set_switch(s->node, s->position, !m_dev.switch_closed(s->node, s->position), now);
-			log("switch " + s->name + (m_dev.switch_closed(s->node, s->position) ? " closed" : " opened"));
-		}
-	}
-	m_mem.flush();
-	// the samples nobody plays: a host would take them here
-	int16_t audio[2 * 1024];
-	while (m_dev.audio_take(audio, 1024)) {}
-}
+#else // not Linux on arm64: the emulated machine is the only one
 
-int supervisor::run()
-{
-	const std::string program = m_opt.game.substr(m_opt.game.rfind('/') + 1);
-	std::error_code ec;
-	for (const auto &e : std::filesystem::directory_iterator(m_opt.files, ec)) if (e.is_regular_file()) m_set_files.push_back(e.path().filename().string());
-	if (m_set_files.empty()) { std::fprintf(stderr, "no files in %s\n", m_opt.files.c_str()); return 2; }
-	if (!load_symbols(m_opt.files + "/" + program)) std::fprintf(stderr, "the program has no symbol table\n");
-	mkdirs(m_opt.state, 0755);
-	const std::string data_dir = std::filesystem::absolute(m_opt.state + "/data").string();
-	mkdirs(data_dir, 0777);
-	m_nvram_path = m_opt.state + "/eeproms.bin";
-	char root_tmpl[] = "/tmp/spike1native.XXXXXX";
-	if (!mkdtemp(root_tmpl)) { std::perror("mkdtemp"); return 1; }
-	const std::string root = root_tmpl;
-	prctl(PR_SET_TIMERSLACK, 1, 0, 0, 0);
+spike1_native::spike1_native() : m_dev(m_mem) {}
+spike1_native::~spike1_native() {}
+bool spike1_native::supported(std::string &why) { why = "a native run needs Linux on arm64"; return false; }
+void spike1_native::start_thread() {}
+bool spike1_native::start(const config &, std::string &error) { supported(error); return false; }
+void spike1_native::stop() {}
+void spike1_native::run_until(uint64_t) {}
+uint64_t spike1_native::now_ns() const { return 0; }
+bool spike1_native::running(std::string &reason) const { reason = "not started"; return false; }
+bool spike1_native::power_down(uint64_t) { return false; }
+std::vector<uint8_t> spike1_native::nvram() const { return {}; }
+bool spike1_native::add_link(const std::string &, const std::string &) { return false; }
+uint32_t spike1_native::symbol(const std::string &) const { return 0; }
+bool spike1_native::game_cpu(double &, unsigned &) const { return false; }
 
-	int sv[2];
-	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv) < 0) { std::perror("socketpair"); return 1; }
-	std::fflush(stdout);
-	m_t0 = mono_ns();
-	m_child = fork();
-	if (m_child < 0) { std::perror("fork"); return 1; }
-	if (m_child == 0) { close(sv[0]); child_main(m_opt, root, data_dir, sv[1]); }
-	close(sv[1]);
-	m_listener = receive_fd(sv[0]);
-	close(sv[0]);
-	if (m_listener < 0) {
-		int status = 0;
-		waitpid(m_child, &status, 0);
-		std::fprintf(stderr, "the child did not start (status %d)\n", status);
-		rmdir(root.c_str());
-		return 1;
-	}
-	log("child " + std::to_string(m_child) + " runs " + m_opt.game + (m_opt.cpus.empty() ? "" : " on cpus " + m_opt.cpus));
-
-	const uint64_t end_ns = uint64_t(m_opt.seconds * 1e9);
-	uint64_t next_tick = 0, next_dmd = m_opt.dmd_every > 0 ? uint64_t(m_opt.dmd_every * 1e9) : UINT64_MAX;
-	uint64_t next_stats = m_opt.stats_every > 0 ? uint64_t(m_opt.stats_every * 1e9) : UINT64_MAX;
-	uint64_t power_off_at = 0, syncs_at_power_off = 0;
-	double last_cpu = 0, last_sup = 0, last_stats_s = 0;
-	uint64_t last_notifications = 0, last_frames = 0;
-	bool child_gone = false;
-	auto sup_cpu = []() { rusage u; getrusage(RUSAGE_SELF, &u); return double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1e6; };
-	std::vector<uint8_t> notif_buf;
-	seccomp_notif_sizes sizes{};
-	syscall(SYS_seccomp, SECCOMP_GET_NOTIF_SIZES, 0, &sizes);
-	notif_buf.resize(std::max<size_t>(sizes.seccomp_notif, sizeof(seccomp_notif)));
-
-	for (;;) {
-		uint64_t now = now_ns();
-		if (!power_off_at && now >= end_ns) {
-			if (!m_started) break;
-			// switched off like a machine: the game commits what it keeps in memory, then syncs
-			m_dev.power_off();
-			power_off_at = now;
-			syncs_at_power_off = m_syncs;
-			log("power off");
-		}
-		if (power_off_at && (m_syncs > syncs_at_power_off || now - power_off_at > 5000000000ull)) {
-			log(m_syncs > syncs_at_power_off ? "nvram: the game synced after the power failed" : "nvram: no sync within 5 s of the power failing");
-			break;
-		}
-		if (now >= next_tick) {
-			tick(now);
-			next_tick = now + 1000000;
-			int status;
-			if (waitpid(m_child, &status, WNOHANG) == m_child) {
-				log(WIFEXITED(status) ? "the program exited with " + std::to_string(WEXITSTATUS(status)) : "the program ended on signal " + std::to_string(WTERMSIG(status)));
-				child_gone = true;
-				break;
-			}
-		}
-		if (now >= next_dmd && m_started) { print_dmd(); next_dmd += uint64_t(m_opt.dmd_every * 1e9); }
-		if (now >= next_stats) {
-			double cpu = 0;
-			unsigned threads = 0;
-			child_cpu(cpu, threads);
-			const double sup = sup_cpu(), now_s = double(now) / 1e9, span = now_s - last_stats_s;
-			std::printf("[%10.6f] stats: game %.1f%% of a core (%u threads), supervisor %.1f%%, %.0f notifications/s, %.1f DMD frames/s\n",
-				now_s, 100.0 * (cpu - last_cpu) / span, threads, 100.0 * (sup - last_sup) / span,
-				double(m_notifications - last_notifications) / span, double(m_dev.dmd_frame_count() - last_frames) / span);
-			std::fflush(stdout);
-			last_cpu = cpu; last_sup = sup; last_stats_s = now_s;
-			last_notifications = m_notifications; last_frames = m_dev.dmd_frame_count();
-			next_stats += uint64_t(m_opt.stats_every * 1e9);
-		}
-
-		// calls waiting on a device, due now
-		for (size_t i = 0; i < m_pending.size(); ) {
-			call &c = m_pending[i];
-			if (c.wake_ns > now) { i++; continue; }
-			uint64_t id = c.n.id;
-			if (ioctl(m_listener, SECCOMP_IOCTL_NOTIF_ID_VALID, &id) < 0) { m_pending.erase(m_pending.begin() + long(i)); continue; } // interrupted
-			int64_t val = 0;
-			const outcome o = handle(c, val);
-			if (o == outcome::wait) { i++; continue; }
-			respond(c, o, val);
-			m_pending.erase(m_pending.begin() + long(i));
-		}
-
-		uint64_t next = std::min(next_tick, next_dmd);
-		for (const call &c : m_pending) next = std::min(next, c.wake_ns);
-		now = now_ns();
-		const uint64_t wait = next > now ? next - now : 0;
-		timespec ts{ time_t(wait / 1000000000ull), long(wait % 1000000000ull) };
-		pollfd p{ m_listener, POLLIN, 0 };
-		if (ppoll(&p, 1, &ts, nullptr) < 0 && errno != EINTR) { std::perror("ppoll"); break; }
-		if (p.revents & POLLHUP) { log("the program and its children have all exited"); child_gone = true; break; }
-		while (p.revents & POLLIN) {
-			std::fill(notif_buf.begin(), notif_buf.end(), 0);
-			if (ioctl(m_listener, SECCOMP_IOCTL_NOTIF_RECV, notif_buf.data()) < 0) break;
-			call c;
-			std::memcpy(&c.n, notif_buf.data(), sizeof(seccomp_notif));
-			m_notifications++;
-			m_counts[c.n.data.nr]++;
-			int64_t val = 0;
-			const outcome o = handle(c, val);
-			if (o == outcome::wait) m_pending.push_back(c);
-			else respond(c, o, val);
-			p.revents = 0;
-			pollfd again{ m_listener, POLLIN, 0 };
-			if (::poll(&again, 1, 0) > 0) p.revents = again.revents & POLLIN;
-		}
-	}
-
-	double cpu = 0;
-	unsigned threads = 0;
-	const bool have_cpu = !child_gone && child_cpu(cpu, threads);
-	if (m_opt.dmd_every > 0 && m_started) print_dmd();
-	if (!child_gone) { kill(m_child, SIGKILL); waitpid(m_child, nullptr, 0); }
-	if (m_started) {
-		const std::vector<uint8_t> nv = m_dev.nvram();
-		if (FILE *f = std::fopen(m_nvram_path.c_str(), "wb")) { std::fwrite(nv.data(), 1, nv.size(), f); std::fclose(f); }
-	}
-	close(m_listener);
-	if (m_pidfd >= 0) close(m_pidfd);
-	rmdir(root.c_str());
-	const double wall = double(now_ns()) / 1e9;
-	std::printf("\nnative run: %.3f s; game CPU %s; supervisor CPU %.3f s; %llu notifications, %llu DMD frames\n", wall,
-		have_cpu ? (std::to_string(cpu) + " s (" + std::to_string(int(100.0 * cpu / wall)) + "% of a core)").c_str() : "n/a",
-		sup_cpu(), (unsigned long long)m_notifications, (unsigned long long)m_dev.dmd_frame_count());
-	std::string per;
-	for (const auto &c : m_counts) per += " " + std::to_string(c.first) + ":" + std::to_string(c.second);
-	std::printf("notifications by system call:%s\n", per.c_str());
-	return 0;
-}
-
-} // namespace
-
-int main(int argc, char **argv)
-{
-	options o;
-	for (int i = 1; i < argc; i++) {
-		const std::string arg = argv[i];
-		auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
-		if (arg == "--files") o.files = next();
-		else if (arg == "--game") o.game = next();
-		else if (arg == "--state") o.state = next();
-		else if (arg == "--seconds") o.seconds = std::atof(next().c_str());
-		else if (arg == "--dmd") o.dmd_every = std::atof(next().c_str());
-		else if (arg == "--stats") o.stats_every = std::atof(next().c_str());
-		else if (arg == "--cpus") o.cpus = next();
-		else if (arg == "--trace") o.trace = true;
-		else if (arg == "--switch") {
-			const std::string v = next();
-			const size_t a = v.find(':'), b = v.rfind(':');
-			options::press p{ std::atof(v.c_str()), 200.0, v.substr(a + 1) };
-			if (b != a && b + 1 < v.size() && std::isdigit(uint8_t(v[b + 1]))) { p.held_ms = std::atof(v.c_str() + b + 1); p.name = v.substr(a + 1, b - a - 1); }
-			o.presses.push_back(p);
-		}
-		else if (arg == "--encoder-motor") {
-			options::encoder_motor m{};
-			if (std::sscanf(next().c_str(), "%d:%d:%d:%d:%u", &m.node, &m.motor, &m.low, &m.high, &m.counts_per_s) != 5) {
-				std::fprintf(stderr, "--encoder-motor takes <node>:<motor>:<low stop>:<high stop>:<counts a second>\n");
-				return 2;
-			}
-			o.encoder_motors.push_back(m);
-		}
-		else { std::fprintf(stderr, "unknown argument %s\n", arg.c_str()); return 2; }
-	}
-	if (o.files.empty() || o.game.empty() || o.game[0] != '/') {
-		std::fprintf(stderr, "usage: spike1native --files <set dir> --game /games/<folder>/game [--state <dir>] [--seconds <n>] [--dmd <s>] [--switch <s>:<name>[:<ms>]]...\n");
-		return 2;
-	}
-	o.files = std::filesystem::absolute(o.files).string();
-	supervisor s(o);
-	return s.run();
-}
+#endif
