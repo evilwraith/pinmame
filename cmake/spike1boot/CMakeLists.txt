@@ -54,3 +54,24 @@ else()
       target_link_options(spike1boot PRIVATE -static)
    endif()
 endif()
+
+# spike1native - the same machine with the game program running natively, as a 32-bit process of
+# its own, on a Linux host that runs AArch32 programs (see src/spike1/spike1_native.cpp)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   add_executable(spike1native
+      ${_root}/src/spike1/spike1_native.cpp
+      ${_root}/src/spike1/spike1_devices.cpp
+      ${_root}/src/spike1/spike1_memory.cpp
+      ${_root}/src/p2k/shim/emu.cpp
+      ${_root}/src/p2k/mame/emu/attotime.cpp
+   )
+   target_include_directories(spike1native BEFORE PRIVATE
+      ${_root}/src/spike1
+      ${_root}/src/p2k/shim
+      ${_root}/src/p2k/mame
+      ${_root}/src/p2k/mame/emu
+      ${_root}/src/p2k/mame/osd
+   )
+   set_target_properties(spike1native PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+   target_compile_options(spike1native PRIVATE -frtti -fno-strict-aliasing -w)
+endif()
