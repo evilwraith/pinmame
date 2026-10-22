@@ -134,6 +134,7 @@ struct child_plan
 	const char *uid_map = nullptr, *gid_map = nullptr;
 	cpu_set_t cpus;
 	bool set_cpus = false;
+	bool drop_to_nobody = false;   // the host runs as root: the game gets nobody, not root, outside
 	sock_fprog prog{};
 	int sock = -1;
 	const char *exec_path = nullptr;
@@ -179,7 +180,31 @@ int child_entry(void *arg)
 	const long devnull = sys(SYS_openat, AT_FDCWD, long("/dev/null"), O_RDWR);
 	if (devnull >= 0) { sys(SYS_dup3, devnull, 0, 0); sys(SYS_close, devnull); }
 
-	// the mounts, as the host's root, in a mount namespace of the game's own
+	// Root to the game, and to the host only who started it: the board runs the game as root, and
+	// the game counts on it (it creates its NVRAM files with whatever mode a register holds, then
+	// reads them back). Root of a user namespace that maps to the caller's own user gets that and
+	// nothing outside; a host that runs as root hands the game to nobody first. Any user may make
+	// such a namespace and map itself; the mounts then happen in a mount namespace it owns, and
+	// the chroot last, as a chrooted process cannot make a user namespace
+	if (p.drop_to_nobody) {
+		CHILD_TRY(STEP_SETGROUPS, sys(SYS_setgroups, 0, 0));
+		CHILD_TRY(STEP_SETRESGID, sys(SYS_setresgid, NOBODY, NOBODY, NOBODY));
+		CHILD_TRY(STEP_SETRESUID, sys(SYS_setresuid, NOBODY, NOBODY, NOBODY));
+		CHILD_TRY(STEP_DUMPABLE, sys(SYS_prctl, PR_SET_DUMPABLE, 1, 0, 0, 0)); // so it can write its own maps
+	}
+	CHILD_TRY(STEP_UNSHARE_USER, sys(SYS_unshare, CLONE_NEWUSER));
+	const char *const maps[3][2] = { { "/proc/self/setgroups", "deny" }, { "/proc/self/uid_map", p.uid_map }, { "/proc/self/gid_map", p.gid_map } };
+	for (const auto &m : maps) {
+		const long fd = sys(SYS_openat, AT_FDCWD, long(m[0]), O_WRONLY | O_CLOEXEC);
+		if (fd < 0) child_fail(3, STEP_MAPS, fd);
+		size_t len = 0;
+		while (m[1][len]) len++;
+		const long n = sys(SYS_write, fd, long(m[1]), long(len));
+		if (n != long(len)) child_fail(3, STEP_MAPS, n < 0 ? n : -EIO);
+		sys(SYS_close, fd);
+	}
+
+	// the mounts, in a mount namespace of the game's own
 	CHILD_TRY(STEP_UNSHARE_NS, sys(SYS_unshare, CLONE_NEWNS));
 	CHILD_TRY(STEP_PRIVATE, sys(SYS_mount, 0, long("/"), 0, MS_REC | MS_PRIVATE, 0));
 	CHILD_TRY(STEP_TMPFS, sys(SYS_mount, long("tmpfs"), long(p.root), long("tmpfs"), MS_NOSUID | MS_NODEV, long(p.tmpfs_options)));
@@ -202,30 +227,13 @@ int child_entry(void *arg)
 		if (fd < 0) child_fail(3, STEP_MOUNT_POINT, fd);
 		sys(SYS_close, fd);
 		CHILD_TRY(STEP_BIND, sys(SYS_mount, long(p.binds[i].src), long(p.binds[i].dst), 0, MS_BIND, 0));
-		CHILD_TRY(STEP_READ_ONLY, sys(SYS_mount, 0, long(p.binds[i].dst), 0, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, 0));
+		// read-only where the source mount's locked flags let a user namespace say so; the game only
+		// reads these, so no harm where they do not
+		if (sys(SYS_mount, 0, long(p.binds[i].dst), 0, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, 0) < 0)
+			sys(SYS_mount, 0, long(p.binds[i].dst), 0, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, 0);
 	}
 	CHILD_TRY(STEP_BIND_DATA, sys(SYS_mount, long(p.data_src), long(p.data_dst), 0, MS_BIND, 0));
 	CHILD_TRY(STEP_CHDIR, sys(SYS_chdir, long(p.root)));
-
-	// Nobody to the host, root to the game: the board runs the game as root, and the game counts
-	// on it (it creates its NVRAM files with whatever mode a register holds, then reads them back).
-	// Root of a user namespace mapped to nobody gets that, and nothing outside. Dumpable, so it can
-	// write its own maps; the chroot comes last, as a chrooted process cannot make a user namespace
-	CHILD_TRY(STEP_SETGROUPS, sys(SYS_setgroups, 0, 0));
-	CHILD_TRY(STEP_SETRESGID, sys(SYS_setresgid, NOBODY, NOBODY, NOBODY));
-	CHILD_TRY(STEP_SETRESUID, sys(SYS_setresuid, NOBODY, NOBODY, NOBODY));
-	CHILD_TRY(STEP_DUMPABLE, sys(SYS_prctl, PR_SET_DUMPABLE, 1, 0, 0, 0));
-	CHILD_TRY(STEP_UNSHARE_USER, sys(SYS_unshare, CLONE_NEWUSER));
-	const char *const maps[3][2] = { { "/proc/self/setgroups", "deny" }, { "/proc/self/uid_map", p.uid_map }, { "/proc/self/gid_map", p.gid_map } };
-	for (const auto &m : maps) {
-		const long fd = sys(SYS_openat, AT_FDCWD, long(m[0]), O_WRONLY | O_CLOEXEC);
-		if (fd < 0) child_fail(3, STEP_MAPS, fd);
-		size_t len = 0;
-		while (m[1][len]) len++;
-		const long n = sys(SYS_write, fd, long(m[1]), long(len));
-		if (n != long(len)) child_fail(3, STEP_MAPS, n < 0 ? n : -EIO);
-		sys(SYS_close, fd);
-	}
 	CHILD_TRY(STEP_CHROOT, sys(SYS_chroot, long(".")));
 	CHILD_TRY(STEP_CHROOT, sys(SYS_chdir, long("/")));
 	if (p.set_cpus) CHILD_TRY(STEP_AFFINITY, sys(SYS_sched_setaffinity, 0, sizeof(p.cpus), long(&p.cpus)));
@@ -313,7 +321,9 @@ spike1_native::~spike1_native() { stop(); }
 
 bool spike1_native::supported(std::string &why)
 {
-	if (geteuid() != 0) { why = "needs root (a mount namespace and a chroot for the game)"; return false; }
+	// the kernel decides the rest when the sandbox is made: user namespaces, seccomp listeners and
+	// AArch32 user mode; start() reports which step it refused
+	(void)why;
 	return true;
 }
 
@@ -380,7 +390,9 @@ bool spike1_native::start(const config &cfg, std::string &error)
 	chmod(m_dir.c_str(), 0755);
 	mkdir((m_dir + "/root").c_str(), 0755);
 	mkdir((m_dir + "/data").c_str(), 0755);
-	if (chown((m_dir + "/data").c_str(), NOBODY, NOBODY) < 0) { error = std::string("chown: ") + std::strerror(errno); stop(); return false; }
+	// the game's root is nobody outside when we are root, else our own user, who owns these already
+	const bool as_root = geteuid() == 0;
+	if (as_root && chown((m_dir + "/data").c_str(), NOBODY, NOBODY) < 0) { error = std::string("chown: ") + std::strerror(errno); stop(); return false; }
 	std::vector<uint8_t> eeproms;
 	{
 		const std::vector<uint8_t> &b = m_cfg.nvram;
@@ -401,13 +413,13 @@ bool spike1_native::start(const config &cfg, std::string &error)
 			eeproms.assign(b.begin() + long(parts[1].first), b.begin() + long(parts[1].first + parts[1].second));
 			auto host = [&](const std::string &guest) { return m_dir + guest; };
 			for (const std::string &d : vfs.written_directories())
-				if (d.rfind("/data/", 0) == 0) { mkdir(host(d).c_str(), 0755); chown(host(d).c_str(), NOBODY, NOBODY); }
+				if (d.rfind("/data/", 0) == 0) { mkdir(host(d).c_str(), 0755); if (as_root) chown(host(d).c_str(), NOBODY, NOBODY); }
 			for (const auto &w : vfs.written_files()) {
 				if (w.first.rfind("/data/", 0) != 0) continue;
 				std::ofstream out(host(w.first), std::ios::binary);
 				out.write(reinterpret_cast<const char *>(w.second->data()), std::streamsize(w.second->size()));
 				out.close();
-				chown(host(w.first).c_str(), NOBODY, NOBODY);
+				if (as_root) chown(host(w.first).c_str(), NOBODY, NOBODY);
 			}
 		} else if (!b.empty())
 			log("nvram: the saved block is not a Spike 1 NVRAM block; starting with a new machine");
@@ -466,8 +478,12 @@ bool spike1_native::spawn(std::string &error)
 	plan.tmpfs_options = keep("size=" + std::to_string((written >> 20) + 16) + "m,mode=755");
 	plan.data_src = keep(m_dir + "/data");
 	plan.data_dst = keep(root + "/data");
-	plan.uid_map = keep("0 " + std::to_string(NOBODY) + " 1");
-	plan.gid_map = keep("0 " + std::to_string(NOBODY) + " 1");
+	// root in the game's user namespace is nobody outside when the host is root, else the host's user
+	plan.drop_to_nobody = geteuid() == 0;
+	const uid_t outside_uid = plan.drop_to_nobody ? NOBODY : geteuid();
+	const gid_t outside_gid = plan.drop_to_nobody ? NOBODY : getegid();
+	plan.uid_map = keep("0 " + std::to_string(outside_uid) + " 1");
+	plan.gid_map = keep("0 " + std::to_string(outside_gid) + " 1");
 	plan.set_cpus = !m_cfg.cpus.empty() && parse_cpus(m_cfg.cpus, plan.cpus);
 	plan.prog = sock_fprog{ uint16_t(filter.size()), filter.data() };
 	plan.exec_path = keep(exec_path);
