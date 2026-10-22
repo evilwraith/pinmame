@@ -119,6 +119,8 @@ unsigned spike1_pinmame_dmd(unsigned char *dots);
    (0-255) while it shows a frame, 0 otherwise */
 int spike1_pinmame_insert_present(void);
 int spike1_pinmame_insert(unsigned short *rgb565, unsigned *backlight);
+/* The frame of the title's lcdinsert.bin the insert shows now, -1 when it shows none */
+int spike1_pinmame_insert_frame(void);
 /* The CPU board's LCD, when the title draws on it: 1 and its picture as RGB565 (320x240) once the
    game has shown a frame, 0 otherwise */
 int spike1_pinmame_lcd(unsigned short *rgb565);
