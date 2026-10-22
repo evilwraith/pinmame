@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstddef>
+#include <deque>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -78,7 +79,21 @@ public:
 	// as zero). False when no view holds addr
 	bool read_view(uint32_t addr, uint32_t &value) const;
 
+	// Native mode (spike1_native, Linux): the game runs as a real 32-bit process and this is its
+	// memory, reached with process_vm_readv/writev. host() then hands out a copy of the range, and
+	// flush() writes the copies taken for writing back into the process; call it after each device
+	// call. 0 leaves the emulated blocks in charge
+	void set_remote(int pid) { m_remote_pid = pid; m_bounce.clear(); }
+	int remote_pid() const { return m_remote_pid; }
+	void flush();
+
 private:
+	int m_remote_pid = 0;
+	struct bounce { uint32_t addr, len; std::vector<uint8_t> bytes; bool write; };
+	std::deque<bounce> m_bounce;     // a deque: host() pointers stay put while more are taken
+	bool remote_read(uint32_t addr, void *dst, size_t len) const;
+	bool remote_write(uint32_t addr, const void *src, size_t len) const;
+
 	struct block { uint32_t base; uint32_t size; uint8_t *mem; };
 	// A host file's mapping behind a block: its start can sit below the block's mem for offset
 	// alignment. Empty for bytes the host holds itself

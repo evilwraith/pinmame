@@ -17,6 +17,9 @@
  #include <sys/mman.h>
  #include <unistd.h>
 #endif
+#if defined(__linux__)
+ #include <sys/uio.h>
+#endif
 
 // Reserved and committed in one go, but the host only backs a page with RAM once it is touched,
 // so the large low block costs what the guest actually uses
@@ -90,6 +93,11 @@ bool spike1_memory::reset()
 
 uint8_t *spike1_memory::host(uint32_t addr, uint32_t len, bool for_write)
 {
+	if (m_remote_pid) {
+		m_bounce.push_back({ addr, len, std::vector<uint8_t>(std::max<uint32_t>(len, 1)), for_write });
+		if (!remote_read(addr, m_bounce.back().bytes.data(), len)) { m_bounce.pop_back(); return nullptr; }
+		return m_bounce.back().bytes.data();
+	}
 	for (block *b : { &m_low, &m_stack, &m_kuser, &m_file }) {
 		if (!b->mem || (for_write && b == &m_file)) continue;
 		const uint32_t off = addr - b->base;
@@ -212,6 +220,7 @@ uint32_t spike1_memory::place(const uint8_t *data, uint32_t length, const host_m
 bool spike1_memory::read(uint32_t addr, void *dst, uint32_t len)
 {
 	if (!len) return true;
+	if (m_remote_pid) return remote_read(addr, dst, len);
 	const uint8_t *p = host(addr, len, false);
 	if (!p) return false;
 	std::memcpy(dst, p, len);
@@ -221,6 +230,7 @@ bool spike1_memory::read(uint32_t addr, void *dst, uint32_t len)
 bool spike1_memory::write(uint32_t addr, const void *src, uint32_t len)
 {
 	if (!len) return true;
+	if (m_remote_pid) return remote_write(addr, src, len);
 	uint8_t *p = host(addr, len);
 	if (!p) return false;
 	std::memcpy(p, src, len);
@@ -230,6 +240,20 @@ bool spike1_memory::write(uint32_t addr, const void *src, uint32_t len)
 bool spike1_memory::read_string(uint32_t addr, std::string &out, size_t limit)
 {
 	out.clear();
+	if (m_remote_pid) {
+		// a page at a time: the string may end just before an unmapped one
+		while (out.size() < limit) {
+			char chunk[GUEST_PAGE_SIZE];
+			const uint32_t n = GUEST_PAGE_SIZE - (addr & (GUEST_PAGE_SIZE - 1));
+			if (!remote_read(addr, chunk, n)) return false;
+			for (uint32_t i = 0; i < n && out.size() < limit; i++) {
+				if (!chunk[i]) return true;
+				out.push_back(chunk[i]);
+			}
+			addr += n;
+		}
+		return false;
+	}
 	for (size_t i = 0; i < limit; i++) {
 		const uint8_t *p = host(addr + uint32_t(i), 1, false);
 		if (!p) return false;
@@ -312,4 +336,36 @@ void spike1_memory::release_span(std::vector<span> &list, uint32_t addr, uint32_
 		(it - 1)->size += it->size;
 		list.erase(it);
 	}
+}
+
+// Native mode: the game's own process
+bool spike1_memory::remote_read(uint32_t addr, void *dst, size_t len) const
+{
+#if defined(__linux__)
+	if (!len) return true;
+	iovec local{ dst, len }, remote{ reinterpret_cast<void *>(uintptr_t(addr)), len };
+	return process_vm_readv(m_remote_pid, &local, 1, &remote, 1, 0) == ssize_t(len);
+#else
+	(void)addr; (void)dst; (void)len;
+	return false;
+#endif
+}
+
+bool spike1_memory::remote_write(uint32_t addr, const void *src, size_t len) const
+{
+#if defined(__linux__)
+	if (!len) return true;
+	iovec local{ const_cast<void *>(src), len }, remote{ reinterpret_cast<void *>(uintptr_t(addr)), len };
+	return process_vm_writev(m_remote_pid, &local, 1, &remote, 1, 0) == ssize_t(len);
+#else
+	(void)addr; (void)src; (void)len;
+	return false;
+#endif
+}
+
+void spike1_memory::flush()
+{
+	for (const bounce &b : m_bounce)
+		if (b.write) remote_write(b.addr, b.bytes.data(), b.len);
+	m_bounce.clear();
 }
