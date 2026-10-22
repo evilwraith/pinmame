@@ -59,9 +59,11 @@ endif()
 # its own, on a Linux host that runs AArch32 programs (see src/spike1/spike1_native.cpp)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
    add_executable(spike1native
+      ${_root}/src/spike1/spike1_native_main.cpp
       ${_root}/src/spike1/spike1_native.cpp
       ${_root}/src/spike1/spike1_devices.cpp
       ${_root}/src/spike1/spike1_memory.cpp
+      ${_root}/src/spike1/spike1_vfs.cpp
       ${_root}/src/p2k/shim/emu.cpp
       ${_root}/src/p2k/mame/emu/attotime.cpp
    )
