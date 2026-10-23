@@ -349,6 +349,10 @@ int osd_get_path_count(int pathtype);
 /* Get information on the existence of a file */
 int osd_get_path_info(int pathtype, int pathindex, const char *filename);
 
+/* The full path of a file in the given path, in UTF-8, for code that works on the file system
+   itself (a set made from a Stern .spk package); 0 when it does not fit in size */
+int osd_get_full_path(int pathtype, int pathindex, const char *filename, char *output, size_t size);
+
 /* Attempt to open a file with the given name and mode using the specified path type */
 osd_file *osd_fopen(int pathtype, int pathindex, const char *filename, const char *mode);
 

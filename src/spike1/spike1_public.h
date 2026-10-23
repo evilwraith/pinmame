@@ -47,6 +47,22 @@ typedef struct spike1_symbol
 	unsigned address, size;
 } spike1_symbol;
 
+/* A file of a set, as its ROM definition gives it */
+typedef struct spike1_set_file
+{
+	const char *name;
+	unsigned size, crc;
+} spike1_set_file;
+
+/* Makes the set's folder <roms_dir>/<set>/ from a Stern .spk update package in roms_dir: the
+   package's game folder whose game program has the set's CRC (files must name "game"). Each file
+   is written into <set>.partial and checked against its size and CRC; the folder takes the set's
+   name once all are in. progress, when given, is told what it does. 1 when it made the set; 0
+   when no package holds it, or with the reason in error when one does but the set could not be
+   made from it */
+int spike1_spk_make_set(const char *roms_dir, const char *set, const spike1_set_file *files, unsigned count,
+                        void (*progress)(const char *message, void *context), void *context, char *error, unsigned error_size);
+
 /* Starts the machine from the title's files. game is the game folder's name (the program runs as
    /games/<game>/game); symbols is NULL, or the list for a program without a symbol table; nvram
    is the block spike1_pinmame_nvram() gave the last time, or NULL for a new machine. 0 on failure,
