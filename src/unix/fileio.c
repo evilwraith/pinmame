@@ -430,6 +430,22 @@ int osd_get_path_count(int pathtype)
 
 
 /*============================================================ */
+/*	osd_get_full_path */
+/*============================================================ */
+
+int osd_get_full_path(int pathtype, int pathindex, const char *filename, char *output, size_t size)
+{
+	char fullpath[1024];
+	compose_path(fullpath, pathtype, pathindex, filename);
+	if (strlen(fullpath) + 1 > size)
+		return 0;
+	strcpy(output, fullpath);
+	return 1;
+}
+
+
+
+/*============================================================ */
 /*	osd_get_path_info */
 /*============================================================ */
 
