@@ -12,6 +12,9 @@
 #include "artwork.h"
 #include <stdarg.h>
 #include <ctype.h>
+#if defined(PINMAME) && (HAS_SPIKE1)
+#include "spike1/spike1_public.h"
+#endif
 
 
 //#define LOG_LOAD
@@ -1775,6 +1778,60 @@ static int process_mapped_entries(struct rom_load_data *romdata, const struct Ro
 }
 
 
+#if defined(PINMAME) && (HAS_SPIKE1)
+/*-------------------------------------------------
+	make_mapped_set_from_package - a mapped set
+	that is not in any ROM path, neither as a
+	folder nor as a zip, can be made from a Stern
+	.spk update package in one: the package holds
+	a Spike 1 title's game folder uncompressed
+-------------------------------------------------*/
+
+static void mapped_set_progress(const char *message, void *context)
+{
+	osd_display_loading_rom_message(message, (struct rom_load_data *)context);
+}
+
+static void make_mapped_set_from_package(struct rom_load_data *romdata, const struct RomModule *romp)
+{
+	const char *set = Machine->gamedrv->name;
+	static spike1_set_file files[MAX_MAPPED_ROMS];
+	char zipname[256], dir[1024], error[512];
+	unsigned count = 0;
+	int i;
+	const int paths = osd_get_path_count(FILETYPE_ROM);
+
+	snprintf(zipname, sizeof(zipname), "%s.zip", set);
+	for (i = 0; i < paths; i++)
+		if (osd_get_path_info(FILETYPE_ROM, i, set) == PATH_IS_DIRECTORY || osd_get_path_info(FILETYPE_ROM, i, zipname) == PATH_IS_FILE)
+			return;
+
+	/* the set's files, with the lengths and CRCs its definition gives */
+	for ( ; !ROMENTRY_ISREGIONEND(romp) && count < MAX_MAPPED_ROMS; romp++)
+	{
+		UINT8 crc[4];
+		if (!ROMENTRY_ISFILE(romp) || !hash_data_extract_binary_checksum(ROM_GETHASHDATA(romp), HASH_CRC, crc))
+			continue;
+		files[count].name = ROM_GETNAME(romp);
+		files[count].size = ROM_GETLENGTH(romp);
+		files[count].crc = (unsigned)crc[0] << 24 | (unsigned)crc[1] << 16 | (unsigned)crc[2] << 8 | crc[3];
+		count++;
+	}
+
+	for (i = 0; i < paths; i++)
+	{
+		if (!osd_get_full_path(FILETYPE_ROM, i, "", dir, sizeof(dir)) || osd_get_path_info(FILETYPE_ROM, i, "") != PATH_IS_DIRECTORY)
+			continue;
+		if (spike1_spk_make_set(dir, set, files, count, mapped_set_progress, romdata, error, sizeof(error)))
+			return;
+		if (*error && strlen(romdata->errorbuf) + strlen(error) + 2 < sizeof(romdata->errorbuf))
+			sprintf(&romdata->errorbuf[strlen(romdata->errorbuf)], "%s\n", error);
+	}
+}
+#endif
+
+
+
 /*-------------------------------------------------
 	process_disk_entries - process all disk entries
 	for a region
@@ -1956,6 +2013,9 @@ int rom_load(const struct RomModule *romp)
 		/* a mapped region has no memory: its files are opened and kept, not loaded */
 		if (ROMREGION_ISMAPPED(region))
 		{
+#if defined(PINMAME) && (HAS_SPIKE1)
+			make_mapped_set_from_package(&romdata, region + 1);
+#endif
 			if (!process_mapped_entries(&romdata, region + 1))
 			{
 				close_mapped_roms();
