@@ -520,6 +520,26 @@ int osd_get_path_count(int pathtype)
 
 
 
+
+//============================================================
+//	osd_get_full_path
+//============================================================
+
+int osd_get_full_path(int pathtype, int pathindex, const char *filename, char *output, size_t size)
+{
+	TCHAR fullpath[1024];
+	compose_path(fullpath, pathtype, pathindex, filename);
+#if (defined(_WIN32) || defined(_WIN64)) && defined(UNICODE)
+	return WideCharToMultiByte(CP_UTF8, 0, fullpath, -1, output, (int)size, NULL, NULL) > 0;
+#else
+	if (strlen(fullpath) + 1 > size)
+		return 0;
+	strcpy(output, fullpath);
+	return 1;
+#endif
+}
+
+
 //============================================================
 //	osd_get_path_info
 //============================================================
