@@ -34,6 +34,7 @@ set(_PINMAME_SPIKE1_SOURCES
    src/spike1/spike1_vfs.cpp
    src/spike1/spike1_pinmame.cpp
    src/spike1/spike1_native.cpp
+   src/spike1/spike1_spk.cpp
    src/spike1/mame/cpu/arm7/arm7.cpp
    src/spike1/mame/cpu/arm7/arm7ops.cpp
    src/spike1/mame/cpu/arm7/arm7thmb.cpp
