@@ -952,3 +952,14 @@ endif()
 if(TARGET pinmame_static)
    pinmame_enable_spike1(pinmame_static)
 endif()
+
+# --- P-ROC game subsystem (src/procgame)
+# On by default on Linux and macOS; -DPINMAME_PROCGAME=OFF leaves neither the driver nor its CPU
+# registered - see cmake/procgame.cmake
+include(${CMAKE_SOURCE_DIR}/cmake/procgame.cmake)
+if(TARGET pinmame_shared)
+   pinmame_enable_procgame(pinmame_shared)
+endif()
+if(TARGET pinmame_static)
+   pinmame_enable_procgame(pinmame_static)
+endif()

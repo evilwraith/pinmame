@@ -3538,6 +3538,11 @@ DRIVER(supreme,101)     //Spike 1:  2018    Supreme (1.01.0)
 DRIVER(smancp,101)      //Spike 1:  2016    Spider-Man CP (1.01)
 #endif
 
+#if HAS_PROCGAME
+DRIVER(ccc,proc)        //P-ROC:    2013    Cactus Canyon Continued (pyprocgame)
+DRIVER(gremlins,proc)   //P-ROC:    2018    Gremlins - Mega Madness (SkeletonGame)
+#endif
+
 #ifdef PIN2K_SOUND_TEST
 DRIVERNV(pin2ksnd)      //                  Pinball 2000 PinMAME DCS2 sound board test harness, RFM  (see docs/pin2k_sound.md)
 DRIVERNV(pin2ksw1)      //                  Pinball 2000 PinMAME DCS2 sound board test harness, SWEP1

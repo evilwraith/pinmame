@@ -69,6 +69,7 @@
 #define GEN_PINHECK     U64(0x10000000000000)/* Spooky PinHeck */
 #define GEN_CAPCOM      U64(0x20000000000000)/* Capcom */
 #define GEN_SPIKE1      U64(0x40000000000000)/* Stern Spike 1 */
+#define GEN_PROCGAME    U64(0x80000000000000)/* P-ROC game (pyprocgame, SkeletonGame) */
 
 #define GEN_ALLWPC      U64(0x00000000000ff) /* All WPC */
 #define GEN_ALLS11      U64(0x000008000ff00) /* All Sys11 */

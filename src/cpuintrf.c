@@ -36,6 +36,9 @@
 #if defined(PINMAME) && (HAS_SPIKE1)
 #include "wpc/spike1.h"
 #endif
+#if defined(PINMAME) && (HAS_PROCGAME)
+#include "wpc/procgame.h"
+#endif
 #if defined(PINMAME) && (HAS_PPS4)
 #include "cpu/pps4/pps4.h"
 #endif
@@ -402,6 +405,9 @@ const struct cpu_interface cpuintrf[] =
 #endif
 #if defined(PINMAME) && (HAS_SPIKE1)
 	CPU0(SPIKE1,   spike1cpu,	 1,  0,1.00,32,32ledw, 0,32,LE,4, 4	),
+#endif
+#if defined(PINMAME) && (HAS_PROCGAME)
+	CPU0(PROCGAME, procgamecpu,	 1,  0,1.00,32,32ledw, 0,32,LE,4, 4	),
 #endif
 #if defined(PINMAME) && (HAS_PPS4)
 	CPU0(PPS4,	   PPS4,	 4,255,1.00, 8, 16,	  0,16,LE,1, 3	),

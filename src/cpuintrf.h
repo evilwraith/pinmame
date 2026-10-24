@@ -42,6 +42,9 @@ enum
 #if defined(PINMAME) && (HAS_SPIKE1)
 	CPU_SPIKE1,
 #endif
+#if defined(PINMAME) && (HAS_PROCGAME)
+	CPU_PROCGAME,
+#endif
 #if defined(PINMAME) && (HAS_PPS4)
 	CPU_PPS4,
 #endif

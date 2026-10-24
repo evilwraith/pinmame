@@ -550,6 +550,25 @@ static bool UpdatePinmameDisplayBitmap(PinmameDisplay* pDisplay, struct mame_bit
 		return changed != 0;
 	}
 
+	/* The same for a 32 bpp direct screen, unrotated (a P-ROC game's display, up to 640x360, every
+	   frame): rows walked directly, 0x00RRGGBB per pixel as src/wpc/procgame.c writes it */
+	if (direct && (depth == 32) && (rotation == 0)) {
+		unsigned int changed = 0;
+		for (int y = 0; y < height; y++) {
+			const UINT32* __restrict const src = (const UINT32*)p_bitmap->line[top + y] + left;
+			UINT8* __restrict row = dst + (size_t)y * width * 3;
+			for (int x = 0; x < width; x++, row += 3) {
+				const UINT32 c = src[x];
+				const UINT8 r = (UINT8)(c >> 16), g = (UINT8)(c >> 8), b = (UINT8)c;
+				changed |= (unsigned int)((row[0] ^ r) | (row[1] ^ g) | (row[2] ^ b));
+				row[0] = r;
+				row[1] = g;
+				row[2] = b;
+			}
+		}
+		return changed != 0;
+	}
+
 	for (int y = 0; y < height; y++) {
 		int pos = (rotation == 0) ? y*width : ((rotation == 1) ? (height - 1 - y) : (y + (width - 1)*height));
 		pos *= 3;
@@ -3146,7 +3165,9 @@ static void SetupMsgApiVideoDisplays()
             def.srcId.width = layout->start;
             def.srcId.height = layout->length;
          }
-         if ((layout->type & CORE_SEGMASK) == CORE_VIDEO)
+         if (((layout->type & CORE_SEGMASK) == CORE_VIDEO) && (layout->type & CORE_VIDEO_DMD))
+            def.srcId.hardware = CTLPI_DISPLAY_HARDWARE_LCD_DISPLAY; // an LCD in the DMD's place (P-ROC games)
+         else if ((layout->type & CORE_SEGMASK) == CORE_VIDEO)
             def.srcId.hardware = CTLPI_DISPLAY_HARDWARE_CRT_DISPLAY;
          else if ((layout->length < 128) || (layout->start < 16))
             def.srcId.hardware = CTLPI_DISPLAY_HARDWARE_UNKNOWN; // Mini display, usually LEDs

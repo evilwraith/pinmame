@@ -199,6 +199,7 @@
 #define CORE_SEGREV       0x080
 #define CORE_NODISP       0x200 // VPinMAME only: if flag is set, the display is not included in VPinMAME window
 #define CORE_VIDEO_ROT90  0x400 // Video is rotated 90 degrees
+#define CORE_VIDEO_DMD    0x800 // Video display in the DMD's place (an LCD the machine has instead of a DMD): shown where a DMD is
 
 #define CORE_SEG8H    (CORE_SEG8  | CORE_SEGHIBIT)
 #define CORE_SEG7H    (CORE_SEG7  | CORE_SEGHIBIT)

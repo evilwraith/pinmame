@@ -2449,6 +2449,8 @@ void core_inputlog_close(void) {
 /  the "smoothed" value
 /--------------------------------------*/
 int core_getSol(int solNo) {
+  if (core_gameData->gen & GEN_PROCGAME) // P-ROC game: every solenoid as the game numbers it (src/wpc/procgame.c)
+    return coreGlobals.nSolenoids && (options.usemodsol & (CORE_MODOUT_ENABLE_PHYSOUT_SOLENOIDS | CORE_MODOUT_ENABLE_MODSOL | CORE_MODOUT_FORCE_ON)) && solNo >= 1 && solNo <= coreGlobals.nSolenoids ? saturatedByte(coreGlobals.physicOutputState[CORE_MODOUT_SOL0 + solNo - 1].value) : core_gameData->hw.getSol(solNo);
   if (solNo <= 28)
     return coreGlobals.nSolenoids && (options.usemodsol & (CORE_MODOUT_ENABLE_PHYSOUT_SOLENOIDS | CORE_MODOUT_ENABLE_MODSOL | CORE_MODOUT_FORCE_ON)) ? saturatedByte(coreGlobals.physicOutputState[CORE_MODOUT_SOL0 + solNo - 1].value) : coreGlobals.solenoids & CORE_SOLBIT(solNo);
   else if (solNo <= 32) { // 29-32
@@ -2534,6 +2536,12 @@ static UINT8 core_getFlipSolBits(void) {
 UINT64 core_getAllSol(void) {
   const UINT8 flipBits = core_getFlipSolBits();
   UINT64 sol = coreGlobals.solenoids;
+  if (core_gameData->gen & GEN_PROCGAME) { // P-ROC game: every solenoid as the game numbers it (src/wpc/procgame.c)
+    int ii;
+    for (sol = 0, ii = 1; ii <= CORE_MAXSOL; ii++)
+      if (core_gameData->hw.getSol(ii)) sol |= ((UINT64)1) << (ii - 1);
+    return sol;
+  }
   if (core_gameData->gen & GEN_ALLWPC) // 29-32 GameOn
     sol = (sol & 0x0fffffffull) | ((coreGlobals.solenoids2 & 0x0f00ull)<<20);
   if (core_gameData->gen & (GEN_WPC95|GEN_WPC95DCS)) { // 37-44 WPC95 extra, duplicated at 0x......XX........
@@ -2585,6 +2593,11 @@ void core_getAllPhysicSols(float* const state)
 {
   assert(coreGlobals.nSolenoids && (options.usemodsol & (CORE_MODOUT_ENABLE_PHYSOUT_SOLENOIDS | CORE_MODOUT_ENABLE_MODSOL | CORE_MODOUT_FORCE_ON)));
   memset(state, 0, CORE_MODOUT_SOL_MAX * sizeof(float)); // To avoid reporting garbage states for unused solenoid slots
+  if (core_gameData->gen & GEN_PROCGAME) { // P-ROC game: every solenoid as the game numbers it (src/wpc/procgame.c)
+    for (int i = 0; i < coreGlobals.nSolenoids; i++)
+      state[i] = coreGlobals.physicOutputState[CORE_MODOUT_SOL0 + i].value;
+    return;
+  }
   // 1..32 solenoids (for WPC also GameOn and J111 GPIO)
   for (int i = 0; i < 32; i++)
     state[i] = coreGlobals.physicOutputState[CORE_MODOUT_SOL0 + i].value;
