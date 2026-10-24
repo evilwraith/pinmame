@@ -1065,11 +1065,17 @@ bool spike1_native::power_down(uint64_t max_ns)
 		m_dev.power_off();
 		syncs = m_syncs;
 	}
+	// The commit is a run of syncs, one per file pair for Game of Thrones, and the game runs on while
+	// the block is read: wait until the syncs have stopped, not for the first one
+	constexpr uint64_t QUIET_NS = 250000000ull;
 	const uint64_t until = now_ns() + max_ns;
+	uint64_t seen = syncs, last_ns = 0;
 	for (;;) {
 		{
 			std::lock_guard<std::mutex> guard(m_lock);
-			if (m_syncs != syncs || m_exited || now_ns() >= until) break;
+			const uint64_t now = now_ns();
+			if (m_syncs != seen) { seen = m_syncs; last_ns = now; }
+			if (m_exited || now >= until || (last_ns && now - last_ns >= QUIET_NS)) break;
 		}
 		if (m_threaded) { timespec ts{ 0, 2000000 }; nanosleep(&ts, nullptr); } // the thread answers the game
 		else pump(std::min<uint64_t>(until, now_ns() + 10000000ull));
@@ -1089,17 +1095,28 @@ std::vector<uint8_t> spike1_native::nvram() const
 		std::error_code ec;
 		std::vector<std::filesystem::path> dirs, files;
 		const std::filesystem::path base = m_dir + "/data";
+		// the game makes its files with the mode it passes, which can leave out the owner's read bit
+		// (Game of Thrones opens its data files with 054): root in the game's user namespace reads
+		// them regardless, we read them as their owner outside it
+		auto let_owner = [](const std::filesystem::path &p, mode_t bits) {
+			struct stat st;
+			if (stat(p.c_str(), &st) == 0 && (st.st_mode & bits) != bits) chmod(p.c_str(), (st.st_mode & 07777) | bits);
+		};
+		let_owner(base, S_IRUSR | S_IXUSR);
 		for (auto it = std::filesystem::recursive_directory_iterator(base, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-			if (it->is_directory(ec)) dirs.push_back(it->path());
-			else if (it->is_regular_file(ec)) files.push_back(it->path());
+			if (it->is_directory(ec)) { let_owner(it->path(), S_IRUSR | S_IXUSR); dirs.push_back(it->path()); }
+			else if (it->is_regular_file(ec)) { let_owner(it->path(), S_IRUSR); files.push_back(it->path()); }
 		}
 		std::sort(dirs.begin(), dirs.end());
 		auto guest = [&](const std::filesystem::path &p) { return "/data/" + p.lexically_relative(base).generic_string(); };
 		for (const auto &d : dirs) vfs.make_directory(guest(d));
 		for (const auto &f : files) {
+			std::ifstream in(f, std::ios::binary);
+			// a file that cannot be read is left out rather than kept empty: the game then finds it
+			// missing, not wiped under a checksum that no longer matches
+			if (!in) { log("nvram: cannot read " + guest(f) + "; left out of the block"); continue; }
 			auto bytes = vfs.open_write(guest(f), true);
 			if (!bytes) continue;
-			std::ifstream in(f, std::ios::binary);
 			bytes->assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 		}
 	}
