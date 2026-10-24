@@ -2013,6 +2013,9 @@ int rom_load(const struct RomModule *romp)
 		/* a mapped region has no memory: its files are opened and kept, not loaded */
 		if (ROMREGION_ISMAPPED(region))
 		{
+#if defined(PINMAME) && (HAS_SPIKE1)
+			make_mapped_set_from_package(&romdata, region + 1);
+#endif
 			if (!process_mapped_entries(&romdata, region + 1))
 			{
 				close_mapped_roms();
