@@ -3541,6 +3541,10 @@ DRIVER(smancp,101)      //Spike 1:  2016    Spider-Man CP (1.01)
 #if HAS_PROCGAME
 DRIVER(ccc,proc)        //P-ROC:    2013    Cactus Canyon Continued (pyprocgame)
 DRIVER(gremlins,proc)   //P-ROC:    2018    Gremlins - Mega Madness (SkeletonGame)
+DRIVER(evildead,proc)   //P-ROC:    2018    Evil Dead (SkeletonGame)
+DRIVER(jaws,proc)       //P-ROC:    2018    Jaws (SkeletonGame)
+DRIVER(kr,proc)         //P-ROC:    2018    Knight Rider (SkeletonGame)
+DRIVER(tsick,proc)      //P-ROC:    2019    Total Sickness (SkeletonGame)
 #endif
 
 #ifdef PIN2K_SOUND_TEST

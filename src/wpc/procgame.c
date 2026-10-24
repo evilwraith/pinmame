@@ -5,7 +5,7 @@
 
   A P-ROC game is a Python program that ran a real machine through a P-ROC board in place of the
   machine's own CPU board: Cactus Canyon Continued on a Cactus Canyon, and the SkeletonGame titles
-  Visual Pinball tables were made for. It has no ROM. src/procgame runs it as a separate process
+  Visual Pinball tables were made for (Gremlins, Evil Dead, Jaws, Knight Rider, Total Sickness). It has no ROM. src/procgame runs it as a separate process
   with a fake board that reads and writes a block of shared memory; this driver makes that a
   PinMAME machine, so a table drives it as it drives any other through the controller.
 
@@ -451,5 +451,45 @@ ROM_START(gremlins_proc)
     ROM_LOAD("manifest", 0x0000, 0x0061, CRC(05aa5212) SHA1(6f2c945912aa3faf8fc1d9ba39c47362b6e47830))
 ROM_END
 CORE_GAMEDEF(gremlins, proc, "Gremlins - Mega Madness (P-ROC)", 2018, "Original", procgame, 0)
+
+/*-------------------------------------------------------------------
+/ Evil Dead (2018) - SkeletonGame, for Visual Pinball (WPC)
+/-------------------------------------------------------------------*/
+PROCGAME_INIT(evildead, 520, 290)
+ROM_START(evildead_proc)
+  ROM_REGION(0x100, REGION_USER1, 0)
+    ROM_LOAD("manifest", 0x0000, 0x0061, CRC(7ee52ccf) SHA1(79e53387b8fb445748bc0e4841e97da8fc1e8a7f))
+ROM_END
+CORE_GAMEDEF(evildead, proc, "Evil Dead (P-ROC)", 2018, "Original", procgame, 0)
+
+/*-------------------------------------------------------------------
+/ Jaws (2018) - SkeletonGame, for Visual Pinball (WPC)
+/-------------------------------------------------------------------*/
+PROCGAME_INIT(jaws, 590, 150)
+ROM_START(jaws_proc)
+  ROM_REGION(0x100, REGION_USER1, 0)
+    ROM_LOAD("manifest", 0x0000, 0x0059, CRC(c94c256f) SHA1(f395faeb5eaa2b02ee326c04ecb7d5307fb6835f))
+ROM_END
+CORE_GAMEDEF(jaws, proc, "Jaws (P-ROC)", 2018, "Original", procgame, 0)
+
+/*-------------------------------------------------------------------
+/ Knight Rider (2018) - SkeletonGame, for Visual Pinball (WPC)
+/-------------------------------------------------------------------*/
+PROCGAME_INIT(kr, 400, 250)
+ROM_START(kr_proc)
+  ROM_REGION(0x100, REGION_USER1, 0)
+    ROM_LOAD("manifest", 0x0000, 0x005e, CRC(98f03f88) SHA1(500d0e23224c289693eea66d76397caf15d6db16))
+ROM_END
+CORE_GAMEDEF(kr, proc, "Knight Rider (P-ROC)", 2018, "Original", procgame, 0)
+
+/*-------------------------------------------------------------------
+/ Total Sickness (2019) - SkeletonGame, for Visual Pinball (WPC-95)
+/-------------------------------------------------------------------*/
+PROCGAME_INIT(tsick, 320, 200)
+ROM_START(tsick_proc)
+  ROM_REGION(0x100, REGION_USER1, 0)
+    ROM_LOAD("manifest", 0x0000, 0x0063, CRC(19ce93b3) SHA1(48f0e33a7903d5051c729a17d0ed21aa2b18e6a6))
+ROM_END
+CORE_GAMEDEF(tsick, proc, "Total Sickness (P-ROC)", 2019, "Original", procgame, 0)
 
 #endif /* HAS_PROCGAME */
