@@ -12,6 +12,9 @@
 #include "artwork.h"
 #include <stdarg.h>
 #include <ctype.h>
+#if defined(PINMAME) && (HAS_SPIKE1)
+#include "spike1/spike1_public.h"
+#endif
 
 
 //#define LOG_LOAD
@@ -81,6 +84,11 @@ extern void core_nvram(void *file, int write, void *mem, size_t length, UINT8 in
 
 /* hard disks */
 static void *hard_disk_handle[4];
+
+/* the files of ROMREGION_MAPPED regions, open until the machine shuts down */
+#define MAX_MAPPED_ROMS		128
+static struct { const struct RomModule *rom; mame_file *file; } mapped_rom[MAX_MAPPED_ROMS];
+static int mapped_roms;
 
 /* system BIOS */
 static int system_bios;
@@ -892,6 +900,36 @@ void *get_disk_handle(int diskindex)
 
 /***************************************************************************
 
+	Mapped ROM handling
+
+***************************************************************************/
+
+const UINT8 *get_mapped_rom(const struct RomModule *romp, UINT32 *length, int *mapped)
+{
+	int i;
+
+	for (i = 0; i < mapped_roms; i++)
+		if (mapped_rom[i].rom == romp)
+		{
+			if (length)
+				*length = (UINT32)mame_fsize(mapped_rom[i].file);
+			if (mapped)
+				*mapped = mame_fmapped(mapped_rom[i].file);
+			return mame_fdata(mapped_rom[i].file);
+		}
+	return NULL;
+}
+
+void close_mapped_roms(void)
+{
+	while (mapped_roms > 0)
+		mame_fclose(mapped_rom[--mapped_roms].file);
+}
+
+
+
+/***************************************************************************
+
 	ROM loading code
 
 ***************************************************************************/
@@ -1185,8 +1223,8 @@ static void verify_length_and_hash(struct rom_load_data *romdata, const char *na
 			sprintf(&romdata->errorbuf[strlen(romdata->errorbuf)], "%-12s NO GOOD DUMP KNOWN\n", name);
 		romdata->warnings++;
 	}
-	/* verify checksums */
-	else if (!hash_data_is_equal(hash, acthash, 0))
+	/* verify checksums (a file mapped from a set's folder is not read, so it has none) */
+	else if (hash_data_used_functions(acthash) && !hash_data_is_equal(hash, acthash, 0))
 	{
 		/* otherwise, it's just bad */
 		sprintf(&romdata->errorbuf[strlen(romdata->errorbuf)], "%-12s WRONG CHECKSUMS:\n", name);
@@ -1262,6 +1300,7 @@ static int display_rom_load_results(struct rom_load_data *romdata)
 		int region;
 		for (region = 0; region < MAX_MEMORY_REGIONS; region++)
 			free_memory_region(region);
+		close_mapped_roms();
 	}
 
 	/* return true if we had any errors */
@@ -1330,7 +1369,7 @@ static void region_post_process(struct rom_load_data *romdata, const struct RomM
 	up the parent and loading by checksum
 -------------------------------------------------*/
 
-static int open_rom_file(struct rom_load_data *romdata, const struct RomModule *romp)
+static int open_rom_file(struct rom_load_data *romdata, const struct RomModule *romp, int mapped)
 {
 	const struct GameDriver *drv;
 
@@ -1345,7 +1384,8 @@ static int open_rom_file(struct rom_load_data *romdata, const struct RomModule *
 	romdata->file = NULL;
 	for (drv = Machine->gamedrv; !romdata->file && drv; drv = drv->clone_of)
 		if (drv->name && *drv->name)
-			romdata->file = mame_fopen_rom(drv->name, ROM_GETNAME(romp), ROM_GETHASHDATA(romp));
+			romdata->file = mapped ? mame_fopen_rom_mapped(drv->name, ROM_GETNAME(romp), ROM_GETHASHDATA(romp))
+			                       : mame_fopen_rom(drv->name, ROM_GETNAME(romp), ROM_GETHASHDATA(romp));
 
 	/* return the result */
 	return (romdata->file != NULL);
@@ -1627,7 +1667,7 @@ static int process_rom_entries(struct rom_load_data *romdata, const struct RomMo
 
 				/* open the file */
 				debugload("Opening ROM file: %s\n", ROM_GETNAME(romp));
-				if (!open_rom_file(romdata, romp)) {
+				if (!open_rom_file(romdata, romp, 0)) {
 					handle_missing_file(romdata, romp);
 				}
 
@@ -1694,6 +1734,101 @@ fatalerror:
 	romdata->file = NULL;
 	return 0;
 }
+
+
+
+/*-------------------------------------------------
+	process_mapped_entries - open the files of a
+	ROMREGION_MAPPED region and keep them open
+-------------------------------------------------*/
+
+static int process_mapped_entries(struct rom_load_data *romdata, const struct RomModule *romp)
+{
+	/* loop until we hit the end of this region */
+	for ( ; !ROMENTRY_ISREGIONEND(romp); romp++)
+	{
+		/* each entry is a whole file: no fills, copies, continues or reloads */
+		if (!ROMENTRY_ISFILE(romp) || ROMENTRY_ISCONTINUE(romp + 1) || ROMENTRY_ISRELOAD(romp + 1))
+		{
+			printf("Error in RomModule definition: a mapped region holds whole files only\n");
+			return 0;
+		}
+		if (ROM_GETBIOSFLAGS(romp) && ROM_GETBIOSFLAGS(romp) != (system_bios+1)) /* alternate bios sets */
+			continue;
+
+		debugload("Opening mapped ROM file: %s\n", ROM_GETNAME(romp));
+		if (!open_rom_file(romdata, romp, 1))
+		{
+			handle_missing_file(romdata, romp);
+			continue;
+		}
+		verify_length_and_hash(romdata, ROM_GETNAME(romp), ROM_GETLENGTH(romp), ROM_GETHASHDATA(romp));
+		if (mapped_roms == MAX_MAPPED_ROMS)
+		{
+			printf("Error: more than %d mapped ROM files\n", MAX_MAPPED_ROMS);
+			mame_fclose(romdata->file);
+			romdata->file = NULL;
+			return 0;
+		}
+		mapped_rom[mapped_roms].rom = romp;
+		mapped_rom[mapped_roms++].file = romdata->file;
+		romdata->file = NULL;
+	}
+	return 1;
+}
+
+
+#if defined(PINMAME) && (HAS_SPIKE1)
+/*-------------------------------------------------
+	make_mapped_set_from_package - a mapped set
+	that is not in any ROM path, neither as a
+	folder nor as a zip, can be made from a Stern
+	.spk update package in one: the package holds
+	a Spike 1 title's game folder uncompressed
+-------------------------------------------------*/
+
+static void mapped_set_progress(const char *message, void *context)
+{
+	osd_display_loading_rom_message(message, (struct rom_load_data *)context);
+}
+
+static void make_mapped_set_from_package(struct rom_load_data *romdata, const struct RomModule *romp)
+{
+	const char *set = Machine->gamedrv->name;
+	static spike1_set_file files[MAX_MAPPED_ROMS];
+	char zipname[256], dir[1024], error[512];
+	unsigned count = 0;
+	int i;
+	const int paths = osd_get_path_count(FILETYPE_ROM);
+
+	snprintf(zipname, sizeof(zipname), "%s.zip", set);
+	for (i = 0; i < paths; i++)
+		if (osd_get_path_info(FILETYPE_ROM, i, set) == PATH_IS_DIRECTORY || osd_get_path_info(FILETYPE_ROM, i, zipname) == PATH_IS_FILE)
+			return;
+
+	/* the set's files, with the lengths and CRCs its definition gives */
+	for ( ; !ROMENTRY_ISREGIONEND(romp) && count < MAX_MAPPED_ROMS; romp++)
+	{
+		UINT8 crc[4];
+		if (!ROMENTRY_ISFILE(romp) || !hash_data_extract_binary_checksum(ROM_GETHASHDATA(romp), HASH_CRC, crc))
+			continue;
+		files[count].name = ROM_GETNAME(romp);
+		files[count].size = ROM_GETLENGTH(romp);
+		files[count].crc = (unsigned)crc[0] << 24 | (unsigned)crc[1] << 16 | (unsigned)crc[2] << 8 | crc[3];
+		count++;
+	}
+
+	for (i = 0; i < paths; i++)
+	{
+		if (!osd_get_full_path(FILETYPE_ROM, i, "", dir, sizeof(dir)) || osd_get_path_info(FILETYPE_ROM, i, "") != PATH_IS_DIRECTORY)
+			continue;
+		if (spike1_spk_make_set(dir, set, files, count, mapped_set_progress, romdata, error, sizeof(error)))
+			return;
+		if (*error && strlen(romdata->errorbuf) + strlen(error) + 2 < sizeof(romdata->errorbuf))
+			sprintf(&romdata->errorbuf[strlen(romdata->errorbuf)], "%s\n", error);
+	}
+}
+#endif
 
 
 
@@ -1846,6 +1981,9 @@ int rom_load(const struct RomModule *romp)
 	/* reset the disk list */
 	memset(hard_disk_handle, 0, sizeof(hard_disk_handle));
 
+	/* and the mapped files */
+	close_mapped_roms();
+
 	/* determine the correct biosset to load based on options.bios string */
 	system_bios = determine_bios_rom(Machine->gamedrv->bios);
 
@@ -1866,6 +2004,20 @@ int rom_load(const struct RomModule *romp)
 		/* if sound is disabled and it's a sound-only region, skip it */
 		if (Machine->sample_rate == 0 && ROMREGION_ISSOUNDONLY(region))
 			continue;
+
+		/* a mapped region has no memory: its files are opened and kept, not loaded */
+		if (ROMREGION_ISMAPPED(region))
+		{
+#if defined(PINMAME) && (HAS_SPIKE1)
+			make_mapped_set_from_package(&romdata, region + 1);
+#endif
+			if (!process_mapped_entries(&romdata, region + 1))
+			{
+				close_mapped_roms();
+				return 1;
+			}
+			continue;
+		}
 
 		/* allocate memory for the region */
 		if (new_memory_region(regiontype, ROMREGION_GETLENGTH(region), ROMREGION_GETFLAGS(region)))

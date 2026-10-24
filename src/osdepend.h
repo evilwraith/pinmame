@@ -349,6 +349,10 @@ int osd_get_path_count(int pathtype);
 /* Get information on the existence of a file */
 int osd_get_path_info(int pathtype, int pathindex, const char *filename);
 
+/* The full path of a file in the given path, in UTF-8, for code that works on the file system
+   itself (a set made from a Stern .spk package); 0 when it does not fit in size */
+int osd_get_full_path(int pathtype, int pathindex, const char *filename, char *output, size_t size);
+
 /* Attempt to open a file with the given name and mode using the specified path type */
 osd_file *osd_fopen(int pathtype, int pathindex, const char *filename, const char *mode);
 
@@ -371,6 +375,14 @@ UINT32 osd_fwrite(osd_file *file, const void *buffer, UINT32 length);
 
 /* Close an open file */
 void osd_fclose(osd_file *file);
+
+/* Map length bytes of a file from offset read-only into memory, paged in from disk as they are
+   read; *data is the first byte. Returns the mapping for osd_funmap(), or NULL when the file
+   cannot be mapped (a host that does not map files returns NULL, and the caller loads it) */
+void *osd_fmap(int pathtype, int pathindex, const char *filename, UINT64 offset, UINT64 length, const UINT8 **data);
+
+/* Release a mapping from osd_fmap() */
+void osd_funmap(void *mapping);
 
 
 
