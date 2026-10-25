@@ -1,6 +1,6 @@
 // license:BSD-3-Clause
 
-// PinMAME Spike 1 subsystem - the CPU board's devices. See spike1_devices.h
+// PinMAME SPIKE 1 subsystem - the CPU board's devices. See spike1_devices.h
 
 #include "spike1_devices.h"
 
@@ -34,10 +34,10 @@ constexpr uint32_t ADC_RATE = 3600;
 constexpr uint32_t ADC_CYCLE = 60, ADC_LOW_SAMPLES = 52;
 constexpr uint16_t ADC_THRESHOLD = 999, ADC_VALLEY = 849, ADC_HIGH = 2000;
 
-uint16_t adc_sample(uint32_t phase)
+static uint16_t adc_sample(uint32_t phase)
 {
 	if (phase >= ADC_LOW_SAMPLES) return ADC_HIGH;
-	const double pi = 3.14159265358979323846;
+	const double pi = 3.1415926535897932384626433832795;
 	return uint16_t(ADC_THRESHOLD - std::lround(ADC_VALLEY * std::sin(pi * (phase + 0.5) / ADC_LOW_SAMPLES)));
 }
 
@@ -71,7 +71,7 @@ constexpr uint32_t AUDIO_BUFFER_FRAMES = 2940 / 4;
 constexpr uint16_t AUDIO_VOLUME_POT = 0x28, POT_FULL_SCALE = 0x80;
 
 // The panel takes a four-bitplane frame per PWM pattern: 1+2+4+8 x 1.05 ms = 15.75 ms
-// (PinMAME's docs/dmd.md, Stern Spike 1)
+// (PinMAME's docs/dmd.md, Stern SPIKE 1)
 constexpr uint64_t DMD_FRAME_NS = 15750000;
 
 // The node bus port's termios c_cflag (asm-generic/termbits.h, which ARM uses): the rate's code in
@@ -84,9 +84,9 @@ constexpr uint32_t TERM_RATES[16] = { 0, 50, 75, 110, 134, 150, 200, 300, 600, 1
 constexpr uint32_t TERM_RATES_EX[16] = { 0, 57600, 115200, 230400, 460800, 500000, 576000, 921600, 1000000, 1152000,
 	1500000, 2000000, 2500000, 3000000, 3500000, 4000000 };
 
-std::string hex(uint32_t v) { char b[16]; std::snprintf(b, sizeof(b), "0x%x", v); return b; }
+static std::string hex(uint32_t v) { char b[16]; std::snprintf(b, sizeof(b), "0x%x", v); return b; }
 
-std::string bytes_hex(const uint8_t *p, uint32_t n, uint32_t limit = 16)
+static std::string bytes_hex(const uint8_t *p, uint32_t n, uint32_t limit = 16)
 {
 	std::string s;
 	char b[4];
@@ -133,7 +133,7 @@ void spike1_devices::start(const config &cfg)
 		if (name.rfind("netbridge-", 0) == 0 && dash != std::string::npos &&
 		    std::sscanf(name.c_str() + dash + 1, "%u_%u_%u.hex", &major, &minor, &patch) == 3) {
 			m_bridge_version[0] = uint8_t(major); m_bridge_version[1] = uint8_t(minor); m_bridge_version[2] = uint8_t(patch);
-			log("node bus: bridge firmware " + name);
+			SPIKE1_LOG("node bus: bridge firmware " + name);
 		}
 	}
 	// The game numbers the chips it has firmware for in name order (its proc key, from 1), and a
@@ -148,14 +148,15 @@ void spike1_devices::start(const config &cfg)
 	};
 	std::sort(chips.begin(), chips.end());
 	m_chip_part.clear();
-	std::string chip_list;
+	SPIKE1_DEBUG_ONLY(std::string chip_list;)
 	for (const auto &chip : chips) {
 		uint32_t part = 0;
 		for (const auto &p : nxp_parts) if (chip == p.chip) part = p.part;
 		m_chip_part.push_back(part);
-		chip_list += " " + chip;
+		SPIKE1_DEBUG_ONLY(chip_list += ' ' + chip;)
 	}
-	log("node bus: node chips" + chip_list);
+	SPIKE1_LOG("node bus: node chips" + chip_list);
+	m_elg = m_cfg.symbol && m_cfg.symbol("_Z12node_query_ti") && m_cfg.symbol("_Z12nodemap_initv");
 	load_device_table();
 	m_motors.clear();
 	for (auto &node : m_coil) for (auto &c : node) c = coil();
@@ -175,6 +176,8 @@ void spike1_devices::start(const config &cfg)
 	m_fb_pans = 0;
 	m_fb_startup_seen = m_fb_background_asked = false;
 	m_video_key.clear();
+	m_alnum_frames = 0;
+	std::memset(m_alnum, 0, sizeof(m_alnum));
 	m_nb_reply.clear();
 	m_nb_arriving.clear();
 	m_nb_line_free_ns = m_nb_sent_ns = m_nb_busy_ns = 0;
@@ -190,8 +193,8 @@ void spike1_devices::start(const config &cfg)
 		if (width == INSERT_HEIGHT && height == INSERT_WIDTH && head[7] == 16 &&
 		    head[0] + uint64_t(frames) * INSERT_WIDTH * INSERT_HEIGHT * 2 <= m_insert_image.size())
 			m_insert_frames = frames;
-		log("node bus: LCD insert image " + hex(m_lcd_image_id) + ", " + std::to_string(frames) + " frames of " +
-			std::to_string(width) + "x" + std::to_string(height) + (m_insert_frames ? "" : " (not a layout the model shows)"));
+		SPIKE1_LOG("node bus: LCD insert image " + hex(m_lcd_image_id) + ", " + std::to_string(frames) + " frames of " +
+			std::to_string(width) + 'x' + std::to_string(height) + (m_insert_frames ? "" : " (not a layout the model shows)"));
 	}
 	m_audio_rate = 44100;
 	m_audio_until_ns = 0;
@@ -205,12 +208,18 @@ void spike1_devices::start(const config &cfg)
 		e.data.assign(0x10000, 0xff);
 		m_eeproms.push_back(std::move(e));
 	}
+	if (m_elg) { // the bridge's own EEPROM, which the ELG titles keep their settings in: blank, as an AVR's erased EEPROM
+		eeprom e;
+		e.slave = ELG_BRIDGE_EEPROM;
+		e.data.assign(ELG_BRIDGE_EEPROM_BYTES, 0xff);
+		m_eeproms.push_back(std::move(e));
+	}
 	m_digipots.clear();
 	for (uint16_t slave = 0x28; slave <= 0x2a; slave++) {
 		digipot pot;
 		pot.slave = slave;
 		pot.reg[0] = pot.reg[1] = POT_FULL_SCALE / 2; // wipers at mid scale after power-up
-		pot.reg[4] = 0x1ff;             // TCON: all terminals connected
+		pot.reg[4] = 0x1ff;                           // TCON: all terminals connected
 		m_digipots.push_back(pot);
 	}
 }
@@ -272,24 +281,26 @@ int32_t spike1_devices::read(handle &h, uint32_t buf, uint32_t len, uint64_t now
 		if (len && !p) return -E_FAULT;
 		std::string trace;
 		const int32_t r = i2c_transfer(h.i2c_slave, true, p, len, trace);
-		if (m_cfg.trace || r < 0) note = "i2c " + hex(h.i2c_slave) + ":" + trace;
+		SPIKE1_DEBUG_ONLY(if (tracing() || r < 0) note = "i2c " + hex(h.i2c_slave) + ':' + trace;)
 		return r;
 	}
 	if (h.type == kind::adc)
 		return adc_read(buf, len, now_ns, wait_ns);
+	if (elg_display_port(h))
+		return 0;
 	if (h.type == kind::node_bus) {
 		const int32_t r = node_bus_read(buf, len, now_ns, wait_ns);
-		if (r == 0 && m_cfg.trace) note = "node bus: no reply waiting";
+		if (r == 0 && tracing()) note = "node bus: no reply waiting";
 		return r;
 	}
-	if (first_time("read " + h.path)) note = "read " + std::to_string(len) + " from " + h.path + ": not modelled";
+	SPIKE1_DEBUG_ONLY(if (first_time("read " + h.path)) note = "read " + std::to_string(len) + " from " + h.path + ": not modelled";)
 	return 0;
 }
 
 uint64_t spike1_devices::readable_at(const handle &h, uint64_t now_ns) const
 {
 	if (h.type == kind::adc) return m_adc_next_ns ? m_adc_next_ns : NEVER; // the buffer being sampled
-	if (h.type == kind::node_bus) {
+	if (h.type == kind::node_bus && !elg_display_port(h)) {
 		if (m_nb_reply.size() > node_bus_in_flight(now_ns)) return now_ns;
 		for (const nb_arrival &a : m_nb_arriving) if (a.at_ns > now_ns) return a.at_ns;
 	}
@@ -302,6 +313,14 @@ int32_t spike1_devices::write(handle &h, uint32_t buf, uint32_t len, uint64_t no
 		return dmd_write(buf, len, now_ns, wait_ns);
 	if (h.type == kind::dmd_spi && len == RGB_FRAME_BYTES)
 		return rgb_write(buf, len, now_ns, wait_ns);
+	if (h.type == kind::dmd_spi && len == ALNUM_FRAME_BYTES && m_elg)
+		return alnum_write(buf, len);
+	if (elg_display_port(h)) {
+		const uint8_t *p = m_mem.host(buf, len, false);
+		if (len && !p) return -E_FAULT;
+		SPIKE1_DEBUG_ONLY(if (first_time("elg display port")) note = "display: text port " + h.path + " " + bytes_hex(p, len, 32) + " (not shown: the segment frames are)";)
+		return int32_t(len);
+	}
 	if (h.type == kind::node_bus)
 		return node_bus_write(buf, len, now_ns, note);
 	if (h.type == kind::i2s)
@@ -311,12 +330,12 @@ int32_t spike1_devices::write(handle &h, uint32_t buf, uint32_t len, uint64_t no
 		if (len && !p) return -E_FAULT;
 		std::string trace;
 		const int32_t r = i2c_transfer(h.i2c_slave, false, p, len, trace);
-		if (m_cfg.trace || r < 0) note = "i2c " + hex(h.i2c_slave) + ":" + trace;
+		SPIKE1_DEBUG_ONLY(if (tracing() || r < 0) note = "i2c " + hex(h.i2c_slave) + ':' + trace;)
 		return r;
 	}
 	const uint8_t *p = m_mem.host(buf, len, false);
 	if (len && !p) return -E_FAULT;
-	if (first_time("write " + h.path + " " + std::to_string(len))) note = "write " + std::to_string(len) + " to " + h.path + ": " + bytes_hex(p, len) + " (not modelled)";
+	SPIKE1_DEBUG_ONLY(if (first_time("write " + h.path + ' ' + std::to_string(len))) note = "write " + std::to_string(len) + " to " + h.path + ": " + bytes_hex(p, len) + " (not modelled)";)
 	return int32_t(len);
 }
 
@@ -340,17 +359,21 @@ int32_t spike1_devices::ioctl(handle &h, uint32_t req, uint32_t arg, uint64_t no
 		if (!guest_read(arg, &code, 4)) return -E_FAULT;
 		if (code >= sizeof(AUDIO_RATES) / sizeof(AUDIO_RATES[0])) return -E_INVAL;
 		m_audio_rate = AUDIO_RATES[code];
-		note = "i2s: " + std::to_string(m_audio_rate) + " Hz";
+		SPIKE1_DEBUG_ONLY(note = "i2s: " + std::to_string(m_audio_rate) + " Hz";)
 		return 0;
 	}
-	if (h.type == kind::i2s && req == 0x3e01)
-		return 0; // follows every rate change with -1; nothing to model
+	if (h.type == kind::i2s && req == 0x3e01) { // the rate in force: [code, u32]. The ELG titles check it after each change; the later titles ask and ignore it
+		const uint32_t code = uint32_t(std::find(std::begin(AUDIO_RATES), std::end(AUDIO_RATES), m_audio_rate) - std::begin(AUDIO_RATES));
+		return guest_write(arg, &code, 4) ? 0 : -E_FAULT;
+	}
 	if (h.type == kind::amp && req == 0x3f00)
 		return 0; // the amplifier's register set-up; the volume comes through the digipots
 	if (h.type == kind::cpu_spi && (req & 0xc000ffff) == 0x40006b00) // SPI_IOC_MESSAGE(n)
 		return cpu_spi_message(req, arg, note);
 	if (h.type == kind::cpu_spi && (req == 0x40046b04 || req == 0x40016b01 || req == 0x40016b03)) // speed, mode, bits per word
 		return 0;
+	if (elg_display_port(h))
+		return 0; // its line settings, 115200 8N1, and its flushes
 	if (h.type == kind::node_bus) {
 		switch (req) {
 		case 0x540b: // TCFLSH: the game drops stale input before every transfer; a reply still on the wire comes in after it
@@ -378,16 +401,16 @@ int32_t spike1_devices::ioctl(handle &h, uint32_t req, uint32_t arg, uint64_t no
 		switch (req) {
 		case I2C_SLAVE: case I2C_SLAVE_FORCE:
 			h.i2c_slave = uint16_t(arg);
-			if (m_cfg.trace) note = "i2c slave " + hex(arg);
+			if (tracing()) note = "i2c slave " + hex(arg);
 			return 0;
 		case I2C_RDWR:
 			return i2c_rdwr(h, arg, note);
 		default:
-			if (first_time("i2c ioctl " + hex(req))) note = "i2c ioctl " + hex(req) + " not modelled";
+			SPIKE1_DEBUG_ONLY(if (first_time("i2c ioctl " + hex(req))) note = "i2c ioctl " + hex(req) + " not modelled";)
 			return -E_INVAL;
 		}
 	}
-	if (first_time("ioctl " + h.path + " " + hex(req))) note = "ioctl " + h.path + " request " + hex(req) + " arg " + hex(arg) + ": not modelled";
+	SPIKE1_DEBUG_ONLY(if (first_time("ioctl " + h.path + ' ' + hex(req))) note = "ioctl " + h.path + " request " + hex(req) + " arg " + hex(arg) + ": not modelled";)
 	return 0;
 }
 
@@ -409,11 +432,11 @@ int32_t spike1_devices::i2c_rdwr(handle &h, uint32_t arg, std::string &note)
 		const bool read = (flags & I2C_M_RD) != 0;
 		uint8_t *p = m_mem.host(buf, len, read);
 		if (len && !p) return -E_FAULT;
-		if (i == 0) trace = " " + hex(addr) + ":";
+		SPIKE1_DEBUG_ONLY(if (i == 0) trace = ' ' + hex(addr) + ':';)
 		const int32_t r = i2c_transfer(addr, read, p, len, trace);
-		if (r < 0) { note = "i2c" + trace; return r; }
+		if (r < 0) { SPIKE1_DEBUG_ONLY(note = "i2c" + trace;) return r; }
 	}
-	if (m_cfg.trace) note = "i2c" + trace;
+	if (tracing()) note = "i2c" + trace;
 	return int32_t(hdr[1]);
 }
 
@@ -424,12 +447,12 @@ int32_t spike1_devices::i2c_transfer(uint16_t slave, bool read, uint8_t *p, uint
 		const uint32_t size = uint32_t(e->data.size());
 		if (read) {
 			for (uint32_t k = 0; k < len; k++) p[k] = e->data[(e->pointer + k) % size];
-			trace += " rd@" + hex(e->pointer) + "[" + std::to_string(len) + "]=" + bytes_hex(p, len, 8);
+			SPIKE1_DEBUG_ONLY(trace += " rd@" + hex(e->pointer) + '[' + std::to_string(len) + "]=" + bytes_hex(p, len, 8);)
 			e->pointer = (e->pointer + len) % size;
 		} else if (len >= 2) {
 			e->pointer = ((uint32_t(p[0]) << 8) | p[1]) % size;
 			if (len > 2) {
-				trace += " wr@" + hex(e->pointer) + "[" + std::to_string(len - 2) + "]=" + bytes_hex(p + 2, len - 2, 8);
+				SPIKE1_DEBUG_ONLY(trace += " wr@" + hex(e->pointer) + '[' + std::to_string(len - 2) + "]=" + bytes_hex(p + 2, len - 2, 8);)
 				for (uint32_t k = 2; k < len; k++) { e->data[e->pointer] = p[k]; e->pointer = (e->pointer + 1) % size; }
 			}
 		}
@@ -440,18 +463,18 @@ int32_t spike1_devices::i2c_transfer(uint16_t slave, bool read, uint8_t *p, uint
 		if (read) {
 			const uint16_t v = pot.reg[pot.pointer & 15];
 			for (uint32_t k = 0; k < len; k++) p[k] = k & 1 ? uint8_t(v) : uint8_t(v >> 8);
-			trace += " pot rd reg " + std::to_string(pot.pointer) + "=" + hex(v);
+			SPIKE1_DEBUG_ONLY(trace += " pot rd reg " + std::to_string(pot.pointer) + '=' + hex(v);)
 			return int32_t(len);
 		}
 		for (uint32_t k = 0; k + 1 < len; k += 2) {
 			const uint8_t address = p[k] >> 4, command = (p[k] >> 2) & 3;
 			pot.pointer = address;
 			if (command == 0) pot.reg[address] = uint16_t(((p[k] & 3) << 8) | p[k + 1]); // write data
-			trace += " pot reg " + std::to_string(address) + " cmd " + std::to_string(command) + " " + hex(((p[k] & 3) << 8) | p[k + 1]);
+			SPIKE1_DEBUG_ONLY(trace += " pot reg " + std::to_string(address) + " cmd " + std::to_string(command) + ' ' + hex(((p[k] & 3) << 8) | p[k + 1]);)
 		}
 		return int32_t(len);
 	}
-	trace += " no device answers";
+	SPIKE1_DEBUG_ONLY(trace += " no device answers";)
 	return -E_NXIO;
 }
 
@@ -565,15 +588,15 @@ const std::vector<uint8_t> &spike1_devices::node_bus_nodes()
 			m_nb_nodes.push_back(node);
 	}
 	m_nb_nodes_known = true;
-	std::string list;
-	for (uint8_t n : m_nb_nodes) list += " " + std::to_string(n);
-	log("node bus: boards" + list);
+	SPIKE1_DEBUG_ONLY(std::string list; for (uint8_t n : m_nb_nodes) list += ' ' + std::to_string(n);)
+	SPIKE1_LOG("node bus: boards" + list);
 	return m_nb_nodes;
 }
 
 void spike1_devices::node_bus_reply(const uint8_t *data, uint32_t len, uint8_t status)
 {
 	uint8_t sum = 0;
+	//m_nb_reply.reserve(m_nb_reply.size() + len + 2);
 	for (uint32_t i = 0; i < len; i++) { m_nb_reply.push_back(data[i]); sum += data[i]; }
 	m_nb_reply.push_back(uint8_t(0 - sum));
 	m_nb_reply.push_back(status);
@@ -606,18 +629,21 @@ int32_t spike1_devices::node_bus_write(uint32_t buf, uint32_t len, uint64_t now_
 	const uint8_t *p = m_mem.host(buf, len, false);
 	if (len && !p) return -E_FAULT;
 	const size_t queued = m_nb_reply.size();
-	if (len == 1 && p[0] == 0) { // poll
+	if (m_elg)
+		elg_node_bus(p, len, now_ns, note);
+	else if (len == 1 && p[0] == 0) { // poll
 		const auto &nodes = node_bus_nodes();
 		const uint8_t next = m_nb_poll < nodes.size() ? nodes[m_nb_poll++] : 0;
 		if (!next) m_nb_poll = 0;
 		m_nb_reply.push_back(next);
-		if (m_cfg.trace) note = "node bus poll -> " + std::to_string(next);
+		if (tracing()) note = "node bus poll -> " + std::to_string(next);
 	} else if (len >= 5 && (p[0] & 0x80) && uint32_t(p[1]) + 3 == len)
 		node_bus_frame(p, len, now_ns, note);
 	else if (len >= 2 && !(p[0] & 0x80) && uint32_t(p[1]) + 2 == len)
 		node_bus_bridge(p, len, note);
-	else
-		note = "node bus: unframed write " + bytes_hex(p, len);
+	else {
+		SPIKE1_DEBUG_ONLY(note = "node bus: unframed write " + bytes_hex(p, len);)
+	}
 	// on the wire once it is free, the answer after it
 	while (!m_nb_arriving.empty() && m_nb_arriving.front().at_ns <= now_ns) m_nb_arriving.pop_front();
 	const uint32_t answer = uint32_t(m_nb_reply.size() - queued);
@@ -636,17 +662,19 @@ void spike1_devices::node_bus_settings(uint32_t cflag, std::string &note)
 	const uint32_t code = cflag & TERM_CBAUD;
 	const uint32_t baud = code & TERM_CBAUDEX ? TERM_RATES_EX[code & 0xf] : TERM_RATES[code];
 	if (!baud) { // B0 hangs the line up; BOTHER takes a rate only TCSETS2 gives
-		note = "node bus: line settings " + hex(cflag) + " not modelled; the line keeps its rate";
+		SPIKE1_DEBUG_ONLY(note = "node bus: line settings " + hex(cflag) + " not modelled; the line keeps its rate";)
 		return;
 	}
 	m_nb_cflag = cflag;
 	const uint32_t data_bits = 5 + ((cflag & TERM_CSIZE) >> 4), stop_bits = cflag & TERM_CSTOPB ? 2 : 1;
 	const uint32_t bits = 1 + data_bits + (cflag & TERM_PARENB ? 1 : 0) + stop_bits;
 	m_nb_char_ns = (uint64_t(bits) * 1000000000ull + baud / 2) / baud;
+#if SPIKE1_DEBUG
 	char text[128];
 	std::snprintf(text, sizeof(text), "node bus: %u baud, %u data bits, %s, %u stop bit%s - %.1f us a byte", baud, data_bits,
 		cflag & TERM_PARENB ? "parity" : "no parity", stop_bits, stop_bits > 1 ? "s" : "", double(m_nb_char_ns) / 1000.0);
 	note = text;
+#endif
 }
 
 // The board block array: sys_node_board_get_next_block_ptr(node) is base + node * stride, the base
@@ -654,8 +682,7 @@ void spike1_devices::node_bus_settings(uint32_t cflag, std::string &note)
 // between SDK versions, so read them from the function itself. Newer SDKs load the stride
 // (mov r3, #imm); older ones (Whoa Nellie, WWE) compute the address with shifts and step the scan
 // loop by it (add r3, r3, #imm). The board type the game settles on for a block sits at the
-// offset node_update_runtime_hex_image_id checks first (ldr r3, [r4, #imm]): +88 on most SDKs,
-// +32 on WWE's
+// offset node_update_runtime_hex_image_id checks first (ldr r3, [r4, #imm]): +88 on most SDKs, +32 on WWE's
 spike1_devices::node_image spike1_devices::node_image_for(uint8_t node)
 {
 	node_image img;
@@ -732,7 +759,7 @@ void spike1_devices::node_bus_frame(const uint8_t *frame, uint32_t len, uint64_t
 	uint8_t sum = 0;
 	for (uint32_t i = 0; i < len - 1; i++) sum += frame[i];
 	const uint8_t node = frame[0] & 0x7f, cmd = frame[2], reply_len = frame[len - 1];
-	if (sum) { note = "node bus: bad checksum " + bytes_hex(frame, len); return; }
+	if (sum) { SPIKE1_DEBUG_ONLY(note = "node bus: bad checksum " + bytes_hex(frame, len);) return; }
 	const uint32_t data_len = reply_len >= 2 ? reply_len - 2u : 0u;
 	m_nb_received[node]++;
 	m_nb_counts[(uint32_t(cmd) << 8) | node]++;
@@ -746,8 +773,7 @@ void spike1_devices::node_bus_frame(const uint8_t *frame, uint32_t len, uint64_t
 			if (!m_limit_motors.empty()) limit_motors_run(now_ns);
 			return;
 		}
-		const uint32_t key = (uint32_t(node) << 8) | cmd;
-		if (m_nb_logged.insert(key).second) note = "node bus: node " + std::to_string(node) + " LED update not understood: " + bytes_hex(frame, len, 32);
+		SPIKE1_DEBUG_ONLY(if (m_nb_logged.insert((uint32_t(node) << 8) | cmd).second) note = "node bus: node " + std::to_string(node) + " LED update not understood: " + bytes_hex(frame, len, 32);)
 		return;
 	}
 	switch (cmd) {
@@ -786,7 +812,7 @@ void spike1_devices::node_bus_frame(const uint8_t *frame, uint32_t len, uint64_t
 		if (!s.distance && (raw & 0x7fff) >= s.steps) s.distance = s.steps; // a target past the turn: once round (Game of Thrones' homing sweep)
 		s.start_ns = now_ns;
 		s.end_ns = now_ns + uint64_t(s.distance) * std::max<uint8_t>(data[3], 1) * 1000000ull;
-		if (m_cfg.trace) note = "node bus: node " + std::to_string(node) + " stepper " + std::to_string(data[0]) + " to " + std::to_string(s.target) + (s.backward ? " backward" : "");
+		if (tracing()) note = "node bus: node " + std::to_string(node) + " stepper " + std::to_string(data[0]) + " to " + std::to_string(s.target) + (s.backward ? " backward" : "");
 		return;
 	}
 	case 0x34: { // home: [stepper][seek] - in older titles (Whoa Nellie) the stepper sits where the reply length goes, and seeks
@@ -821,7 +847,7 @@ void spike1_devices::node_bus_frame(const uint8_t *frame, uint32_t len, uint64_t
 	case 0x51: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57:
 		if (n < 1) break;
 		motor_command(node, cmd, data, n, now_ns);
-		if (m_cfg.trace) note = "node bus: node " + std::to_string(node) + " motor " + std::to_string(data[0]) + " command " + hex(cmd) + " " + bytes_hex(data + 1, n - 1);
+		if (tracing()) note = "node bus: node " + std::to_string(node) + " motor " + std::to_string(data[0]) + " command " + hex(cmd) + ' ' + bytes_hex(data + 1, n - 1);
 		return;
 	case 0x52: { // status: [motor] -> [position, u16][status, u16]
 		if (n < 1 || data_len != 4) break;
@@ -854,7 +880,7 @@ void spike1_devices::node_bus_frame(const uint8_t *frame, uint32_t len, uint64_t
 		const uint8_t r[2] = { uint8_t(img.checksum), uint8_t(img.checksum >> 8) };
 		if (data_len == sizeof(r)) {
 			node_bus_reply(r, sizeof(r));
-			if (m_cfg.trace || !img.found) note = "node bus: node " + std::to_string(node) + " GetChecksum -> " + hex(img.checksum) + (img.found ? "" : " (no image)");
+			SPIKE1_DEBUG_ONLY(if (tracing() || !img.found) note = "node bus: node " + std::to_string(node) + " GetChecksum -> " + hex(img.checksum) + (img.found ? "" : " (no image)");)
 			return;
 		}
 		break;
@@ -889,10 +915,10 @@ void spike1_devices::node_bus_frame(const uint8_t *frame, uint32_t len, uint64_t
 		r[8] = uint8_t(NODE_TICK_HZ & 0xff); r[9] = uint8_t(NODE_TICK_HZ >> 8);
 		if (data_len == sizeof(r)) {
 			node_bus_reply(r, sizeof(r));
-			if (m_cfg.trace || !img.found)
+			SPIKE1_DEBUG_ONLY(if (tracing() || !img.found)
 				note = "node bus: node " + std::to_string(node) + " GetVersion -> " + (img.found ? "" : "no image yet, ") +
-					std::to_string(img.version[0]) + "." + std::to_string(img.version[1]) + "." + std::to_string(img.version[2]) +
-					" part " + hex(img.part) + " board type " + hex(img.board_type);
+					std::to_string(img.version[0]) + '.' + std::to_string(img.version[1]) + '.' + std::to_string(img.version[2]) +
+					" part " + hex(img.part) + " board type " + hex(img.board_type);)
 			return;
 		}
 		break;
@@ -904,12 +930,9 @@ void spike1_devices::node_bus_frame(const uint8_t *frame, uint32_t len, uint64_t
 		std::vector<uint8_t> zeros(data_len, 0);
 		node_bus_reply(zeros.data(), data_len);
 	}
-	const uint32_t key = (uint32_t(node) << 8) | cmd;
-	if (!m_nb_logged.count(key)) {
-		m_nb_logged.insert(key);
+	SPIKE1_DEBUG_ONLY(if (m_nb_logged.insert((uint32_t(node) << 8) | cmd).second)
 		note = "node bus: node " + std::to_string(node) + " command " + hex(cmd) +
-			(data_len ? " (a query, answered with " + std::to_string(data_len) + " zeros)" : "") + " not modelled: " + bytes_hex(frame, len, 32);
-	}
+			(data_len ? " (a query, answered with " + std::to_string(data_len) + " zeros)" : "") + " not modelled: " + bytes_hex(frame, len, 32);)
 }
 
 // A command to the bridge itself: [cmd][n][n bytes], and the bridge answers with as many raw bytes
@@ -930,14 +953,258 @@ void spike1_devices::node_bus_bridge(const uint8_t *msg, uint32_t len, std::stri
 		m_nb_reply.push_back(0x00);
 		break;
 	case 0x06: // a setting the game sends without waiting for an answer
-		if (m_cfg.trace) note = "node bus: bridge command 0x6 " + bytes_hex(msg, len);
+		if (tracing()) note = "node bus: bridge command 0x6 " + bytes_hex(msg, len);
 		return;
 	default:
-		if (m_nb_logged.insert(0xff00 | cmd).second)
-			note = "node bus: bridge command " + hex(cmd) + " not modelled: " + bytes_hex(msg, len);
+		SPIKE1_DEBUG_ONLY(if (m_nb_logged.insert(0xff00 | cmd).second)
+			note = "node bus: bridge command " + hex(cmd) + " not modelled: " + bytes_hex(msg, len);)
 		return;
 	}
-	if (m_cfg.trace) note = "node bus: bridge command " + hex(cmd);
+	if (tracing()) note = "node bus: bridge command " + hex(cmd);
+}
+
+// ---------------------------------------------------------------- the ELG framework
+//
+// Transformers The Pin and Avengers The Pin run Stern's earlier framework (its build path:
+// system-elg; their game folders tf-elg and avengers-elg). Its node_pdi.cpp talks to node firmware
+// 0.5 and 0.6 at 115200 baud, 8 data bits, 2 stop bits, with no checksum and no reply length:
+//   poll    the byte 00; one byte back, the address of a board whose inputs changed since its last
+//           query, 0 when none did (node_serial_update_t() queries that board, then polls again)
+//   frame   [0x80|node][n][cmd][n - 1 data bytes]; only the query, status and quadrature answer
+//   0x11    query: the board's eight input bytes (input p = byte p/8, bit p%8)
+//   0xff    status: six bytes, error bits in the last two (node_status_t())
+//   0x60    quadrature [a][b]: one byte, the encoder's movement since the last ask
+//   0xf2    traffic flag
+//   0x40|c  coil c: [power 1][ms][power 2][ms] (node_coilmsg())
+//   0x48|c  coil c's reflex: a pop or a sling [power 1][ms][power 2][ms][input][hold-off ms]; a
+//           flipper [power 1][ms][hold power][EOS input][0x40|button input][3 bytes], held while
+//           the button stays closed. The game disarms a reflex by sending it with power 1 at 0
+//           (COILSTATE_Update())
+//   0x50    motor [3 bytes] (node_motormsg(); neither title has a motor)
+//   0x80|f  LED outputs f on: a level (0-255) each, set at once (node_ledmsg())
+// The times are taken as ms: the coil table's flipper pulse is 64, its sling pulse 20, and the game
+// refreshes a coil it holds on, sent for 255, every 250. The game keeps its settings in the
+// bridge's EEPROM, which it reaches in the bridge's command mode (elg_bridge_command())
+void spike1_devices::elg_node_bus(const uint8_t *p, uint32_t len, uint64_t now_ns, std::string &note)
+{
+	if (len >= 3 && p[0] == 0x55) { elg_bridge_command(p, len, note); return; }
+	if (len == 1 && p[0] == 0) {
+		uint8_t answer = 0;
+		for (uint8_t node : m_elg_nodes) if (elg_inputs_changed(node)) { answer = node; break; }
+		m_nb_reply.push_back(answer);
+		if (tracing()) note = "node bus poll -> " + std::to_string(answer);
+		return;
+	}
+	if (len < 3 || !(p[0] & 0x80) || uint32_t(p[1]) + 2 != len) { SPIKE1_DEBUG_ONLY(note = "node bus: unframed write " + bytes_hex(p, len);) return; }
+	const uint8_t node = p[0] & 0x7f, cmd = p[2];
+	const uint8_t *data = p + 3;
+	const uint32_t n = len - 3;
+	m_nb_received[node]++;
+	m_nb_counts[(uint32_t(cmd) << 8) | node]++;
+	if (m_frame_observer) m_frame_observer(now_ns, p, len);
+	if (cmd >= 0x80 && cmd <= 0xbf) {
+		for (uint32_t i = 0; i < n && (cmd & 0x3fu) + i < LED_CHANNELS; i++) led_set(node, uint8_t((cmd & 0x3f) + i), data[i], 0, now_ns);
+		return;
+	}
+	if ((cmd & 0xf8) == 0x40 && n == 4) {
+		coil_pulse(node, cmd & 7, data[0], data[1], data[2], data[3], now_ns);
+		if (tracing()) note = "node bus: node " + std::to_string(node) + " coil " + std::to_string(cmd & 7) + " " + bytes_hex(data, n);
+		return;
+	}
+	if ((cmd & 0xf8) == 0x48 && (n == 6 || n == 8)) {
+		elg_coil_reflex(node, cmd & 7, data, n, note);
+		return;
+	}
+	switch (cmd) {
+	case 0x11: {
+		uint8_t r[8];
+		wire_bytes(node, r, sizeof(r));
+		m_nb_reply.insert(m_nb_reply.end(), r, r + sizeof(r));
+		return;
+	}
+	case 0xff: // nothing to report
+		m_nb_reply.insert(m_nb_reply.end(), 6, 0);
+		return;
+	case 0x60: // the titles have no encoder
+		m_nb_reply.push_back(0);
+		return;
+	case 0xf2:
+		return;
+	}
+	SPIKE1_DEBUG_ONLY(if (m_nb_logged.insert((uint32_t(node) << 8) | cmd).second)
+		note = "node bus: node " + std::to_string(node) + " command " + hex(cmd) + " not modelled: " + bytes_hex(p, len, 32);)
+}
+
+// The bridge in command mode (sys_command_mode(): the game raises a GPIO line around each
+// exchange): [0x55][cmd][n][n bytes][sum], the sum making the bytes after 0x55 add up to 0, and the
+// answer [0xaa][n][n bytes][sum] the same way. LL_sys_eep_read(): cmd 0 [address, u16 big endian]
+// -> the byte; LL_sys_eep_write(): cmd 1 [address][byte] -> nothing. The game sends a read with a
+// stray byte after it, which the length leaves out
+void spike1_devices::elg_bridge_command(const uint8_t *p, uint32_t len, std::string &note)
+{
+	const uint32_t n = p[2];
+	uint8_t sum = 0;
+	for (uint32_t i = 1; i < 4 + n && i < len; i++) sum += p[i];
+	eeprom *e = find_eeprom(ELG_BRIDGE_EEPROM);
+	if (len < 4 + n || sum || !e) { SPIKE1_DEBUG_ONLY(note = "node bus: bridge command not understood: " + bytes_hex(p, len);) return; }
+	const uint32_t address = n >= 2 ? (uint32_t(p[3]) << 8 | p[4]) : ~0u;
+	auto answer = [&](const uint8_t *data, uint8_t count) {
+		uint8_t s = count;
+		m_nb_reply.push_back(0xaa);
+		m_nb_reply.push_back(count);
+		for (uint8_t i = 0; i < count; i++) { m_nb_reply.push_back(data[i]); s += data[i]; }
+		m_nb_reply.push_back(uint8_t(0 - s));
+	};
+	if (p[1] == 0 && n == 2 && address < e->data.size()) {
+		answer(&e->data[address], 1);
+		if (tracing()) note = "bridge EEPROM read " + hex(address) + " -> " + hex(e->data[address]);
+	} else if (p[1] == 1 && n == 3 && address < e->data.size()) {
+		e->data[address] = p[5];
+		answer(nullptr, 0);
+		if (tracing()) note = "bridge EEPROM write " + hex(address) + " = " + hex(p[5]);
+	} else
+		SPIKE1_DEBUG_ONLY(if (m_nb_logged.insert(0xfe00 | p[1]).second) note = "node bus: bridge command " + hex(p[1]) + " not modelled: " + bytes_hex(p, len);)
+}
+
+void spike1_devices::elg_coil_reflex(uint8_t node, uint8_t index, const uint8_t *data, uint32_t len, std::string &note)
+{
+	coil &c = m_coil[node][index];
+	const bool flipper = len == 8;
+	c.reflex = data[0] != 0;
+	c.reflex_power1 = data[0];
+	c.reflex_pulse_ms = data[1];
+	c.reflex_power2 = flipper ? data[2] : 0;
+	c.reflex_holdoff_ms = flipper ? 0 : data[5];
+	c.trigger[0] = uint8_t(REFLEX_USED | (data[4] & REFLEX_POSITION)); // the input, or the flipper's button
+	c.trigger[1] = c.trigger[2] = 0;
+	c.eos = flipper ? uint8_t(REFLEX_USED | (data[3] & REFLEX_POSITION)) : 0;
+	c.trigger_was_active = c.reflex && reflex_triggered(node, c);
+	if (!c.reflex) c.holding = false;
+	SPIKE1_DEBUG_ONLY(if (!flipper && data[2] && data[3] && first_time("elg reflex second phase"))
+		note = "node bus: node " + std::to_string(node) + " coil reflex with a second phase (not modelled): " + bytes_hex(data, len);
+	else if (tracing())
+		note = "node bus: node " + std::to_string(node) + " coil " + std::to_string(index) + (c.reflex ? " reflex on switch " + std::to_string(c.trigger[0] & REFLEX_POSITION) : " reflex off");)
+}
+
+// Like wire_bytes(): the next query shows a change
+bool spike1_devices::elg_inputs_changed(uint8_t node) const
+{
+	const uint8_t n = node & 127;
+	for (uint32_t i = 0; i < 8; i++) if ((m_sw_closed[n][i] ^ m_sw_read[n][i]) | m_sw_changed[n][i]) return true;
+	return false;
+}
+
+// The ELG titles' tables:
+//   g_smap<n>     a board's switch map: 64 inputs of 56 bytes - [switch byte, u32][bit mask]
+//                 [inverted][name, SWITCH_...] - then 0x4c bytes of the map's own state. The game
+//                 numbers a switch byte * 8 + bit; an inverted input reads 0 while it is closed
+//   __coil_table  60 bytes a coil: [node][output][type: 0 pulse, 1 reflex, 2 flipper][power 1][ms]
+//                 [power 2][ms][hold-off ms][input][EOS input][2 bytes][name, "0 - SLINGSHOTS"]
+//   __lamp_table  [node][output] a lamp
+// The game counts its switches, coils and lamps from 0, as its test menu shows them; here they are
+// one more, as PinMAME's numbers start at 1. nodemap_init() registers one map, for the one board
+// the coil and lamp tables name (node 8 in both titles); the maps it leaves empty are not in the
+// program's data. The board's names lose their SWITCH_ prefix and underscores, as the other titles
+// write them. The CPU board's own switches (g_smap_gpio) are empty in both
+void spike1_devices::elg_load_tables()
+{
+	constexpr uint32_t COIL_ENTRY = 60, COIL_NAME_AT = 12, MAP_INPUTS = 64, MAP_ENTRY = 56, MAP_STATE_BYTES = 0x4c;
+	auto table = [&](const char *name, std::vector<uint8_t> &out) {
+		const uint32_t a = m_cfg.symbol(name), size = m_cfg.symbol_size ? m_cfg.symbol_size(name) : 0;
+		out.assign(size, 0);
+		return a && size && guest_read(a, out.data(), size);
+	};
+	m_elg_nodes.clear();
+	auto add_node = [&](uint8_t node) { if (node && node < 128 && std::find(m_elg_nodes.begin(), m_elg_nodes.end(), node) == m_elg_nodes.end()) m_elg_nodes.push_back(node); };
+	std::vector<uint8_t> t;
+	if (table("__coil_table", t))
+		for (uint32_t i = 0; (i + 1) * COIL_ENTRY <= t.size(); i++) {
+			const uint8_t *e = &t[i * COIL_ENTRY];
+			std::string name(reinterpret_cast<const char *>(e + COIL_NAME_AT), strnlen(reinterpret_cast<const char *>(e + COIL_NAME_AT), COIL_ENTRY - COIL_NAME_AT));
+			const size_t dash = name.find(" - ");
+			if (dash != std::string::npos) name = name.substr(dash + 3);
+			if (name.empty() || !e[0] || e[1] >= COILS_PER_NODE) continue; // the table's unused entries, "8 - "
+			m_coils.push_back({ uint16_t(i + 1), e[0], e[1], name });
+			add_node(e[0]);
+		}
+	if (table("__lamp_table", t))
+		for (uint32_t i = 0; 2 * i + 1 < t.size(); i++) {
+			if (!t[2 * i] || t[2 * i + 1] >= LED_CHANNELS) continue; // node 0: unused
+			m_leds.push_back({ uint16_t(i + 1), t[2 * i], t[2 * i + 1], "LAMP " + std::to_string(i), 1 }); // as the lamp test names it
+			add_node(t[2 * i]);
+		}
+	uint32_t maps = 0;
+	for (const auto &map : m_cfg.symbols_with_prefix ? m_cfg.symbols_with_prefix("g_smap") : std::vector<std::string>()) {
+		if (!table(map.c_str(), t) || t.size() != MAP_INPUTS * MAP_ENTRY + MAP_STATE_BYTES) continue;
+		std::vector<switch_info> found;
+		for (uint32_t position = 0; position < MAP_INPUTS; position++) {
+			const uint8_t *e = &t[position * MAP_ENTRY];
+			const uint32_t byte = uint32_t(e[0] | (e[1] << 8) | (e[2] << 16) | (uint32_t(e[3]) << 24)), mask = e[4];
+			if (!mask || (mask & (mask - 1)) || byte > 7) continue;
+			unsigned bit = 0;
+			while (!((mask >> bit) & 1)) bit++;
+			std::string name(reinterpret_cast<const char *>(e + 6), strnlen(reinterpret_cast<const char *>(e + 6), MAP_ENTRY - 6));
+			if (name.rfind("SWITCH_", 0) == 0) name = name.substr(7);
+			std::replace(name.begin(), name.end(), '_', ' ');
+			switch_info s;
+			s.number = uint16_t(byte * 8 + bit + 1);
+			s.position = uint8_t(position);
+			s.active_high = !e[5];
+			s.name = name;
+			found.push_back(s);
+		}
+		if (found.empty()) continue;
+		maps++;
+		if (maps > 1 || m_elg_nodes.size() != 1) { SPIKE1_LOG("devices: ELG switch map " + map + ": its board is not known (more than one map or board)"); continue; }
+		for (auto &s : found) {
+			s.node = m_elg_nodes[0];
+			if (s.active_high) m_sw_active_high[s.node][s.position >> 3] |= uint8_t(1 << (s.position & 7));
+			m_switches.push_back(s);
+		}
+	}
+	// The trough holds a ball at each of its numbered optos (TROUGH 1-3); the jam optos stay open
+	for (const auto &s : m_switches)
+		if (s.name.rfind("TROUGH ", 0) == 0 && s.name.size() > 7 && std::isdigit(uint8_t(s.name[7]))) set_switch(s.node, s.position, true, 0);
+	SPIKE1_DEBUG_ONLY(std::string closed; for (const auto &s : m_switches) if (switch_closed(s.node, s.position)) closed += ' ' + s.name + ',';)
+	SPIKE1_LOG("devices: ELG framework: " + std::to_string(m_coils.size()) + " coils, " + std::to_string(m_leds.size()) + " lamps, " +
+		std::to_string(m_switches.size()) + " switches from the game's tables; closed at rest:" + (closed.empty() ? " none" : closed.substr(0, closed.size() - 1)));
+}
+
+// The alphanumeric display's frame (the game's dmd_update_t()): four 64-byte bitplanes, plane n
+// holding bit n of every segment's 4-bit level, segment k of character c at bit 16c + k, most
+// significant bit of a byte first. The game paces its frames itself
+int32_t spike1_devices::alnum_write(uint32_t buf, uint32_t len)
+{
+	const uint8_t *p = m_mem.host(buf, len, false);
+	if (!p) return -E_FAULT;
+	constexpr uint32_t plane = ALNUM_FRAME_BYTES / 4;
+	for (uint32_t i = 0; i < ALNUM_CHARS * ALNUM_SEGMENTS; i++) {
+		uint8_t level = 0;
+		for (uint32_t n = 0; n < 4; n++) level |= ((p[n * plane + i / 8] >> (7 - i % 8)) & 1) << n;
+		m_alnum[i] = level;
+	}
+	m_alnum_frames++;
+	return int32_t(len);
+}
+
+// The game's font: 16 bytes a character, a segment lit where its byte is not 0
+std::string spike1_devices::alnum_text() const
+{
+	constexpr uint32_t GLYPHS = 128;
+	const uint32_t font = m_cfg.symbol ? m_cfg.symbol("_ZL4font") : 0;
+	uint8_t glyph[GLYPHS * ALNUM_SEGMENTS] = {};
+	const bool have_font = font && m_mem.read(font, glyph, sizeof(glyph));
+	std::string text;
+	for (uint32_t c = 0; c < ALNUM_CHARS; c++) {
+		char shown = '?';
+		for (uint32_t g = ' '; have_font && g < GLYPHS; g++) {
+			uint32_t k = 0;
+			while (k < ALNUM_SEGMENTS && (glyph[g * ALNUM_SEGMENTS + k] != 0) == (m_alnum[c * ALNUM_SEGMENTS + k] != 0)) k++;
+			if (k == ALNUM_SEGMENTS) { shown = char(g); break; }
+		}
+		text += shown;
+	}
+	return text;
 }
 
 // ---------------------------------------------------------------- switches
@@ -949,8 +1216,7 @@ void spike1_devices::node_bus_bridge(const uint8_t *msg, uint32_t len, std::stri
 //                             4 = LED channel, 7 = switch
 //   switch_table              entry per switch number: +0x10 flags (bit 2: active high,
 //   switch_dedicated_table    bit 7: closed at rest), the dedicated ones numbered from 129
-// The numbers there are the game's own; apply_manual_numbers() gives switches, coils and LED channels
-// the manual's
+// The numbers there are the game's own; apply_manual_numbers() gives switches, coils and LED channels the manual's
 void spike1_devices::load_device_table()
 {
 	m_switches.clear();
@@ -961,6 +1227,7 @@ void spike1_devices::load_device_table()
 	std::memset(m_sw_changed, 0, sizeof(m_sw_changed));
 	std::memset(m_sw_active_high, 0, sizeof(m_sw_active_high));
 	if (!m_cfg.symbol) return;
+	if (m_elg) { elg_load_tables(); return; }
 	auto desc = [&](const char *name, uint32_t out[3]) {
 		out[0] = out[1] = out[2] = 0;
 		const uint32_t a = m_cfg.symbol(name);
@@ -1031,8 +1298,8 @@ void spike1_devices::load_device_table()
 			auto input = std::find_if(read_at->second.begin(), read_at->second.end(),
 				[&](const std::pair<uint8_t, uint8_t> &i) { return i.first == s.node; });
 			if (input == read_at->second.end()) input = read_at->second.begin();
-			moved += " " + name + " " + std::to_string(input->first) + "-" + std::to_string(input->second) +
-				" (" + std::to_string(s.node) + "-" + std::to_string(s.position) + "),";
+			moved += ' ' + name + ' ' + std::to_string(input->first) + '-' + std::to_string(input->second) +
+				" (" + std::to_string(s.node) + '-' + std::to_string(s.position) + "),";
 			s.node = input->first;
 			s.position = input->second;
 		}
@@ -1046,8 +1313,7 @@ void spike1_devices::load_device_table()
 	}
 
 	// What is closed while the machine stands idle with its coin door shut: a trough opto for every
-	// installed ball, the firmware's own closed-at-rest marks on other switches, and the door's
-	// power sense (DC present)
+	// installed ball, the firmware's own closed-at-rest marks on other switches, and the door's power sense (DC present)
 	auto upper_name = [](std::string n) { for (auto &c : n) c = char(std::toupper(uint8_t(c))); return n; };
 	uint8_t installed = 1;
 	if (const uint32_t a = m_cfg.symbol("hook_balls_installed_in_game")) guest_read(a, &installed, 1);
@@ -1069,12 +1335,11 @@ void spike1_devices::load_device_table()
 			set_switch(f.first.node, f.first.position, true, 0);
 	}
 	if (!moved.empty())
-		log("devices: where the game's switch maps read what its device table puts elsewhere:" + moved.substr(0, moved.size() - 1));
+		SPIKE1_LOG("devices: where the game's switch maps read what its device table puts elsewhere:" + moved.substr(0, moved.size() - 1));
 	for (auto &f : found) m_switches.push_back(f.first);
 	apply_manual_numbers(device);
-	std::string closed;
-	for (const auto &s : m_switches) if (switch_closed(s.node, s.position)) closed += " " + s.name + ",";
-	log("devices: " + std::to_string(m_coils.size()) + " coils, " + std::to_string(m_leds.size()) + " LED channels, " +
+	SPIKE1_DEBUG_ONLY(std::string closed; for (const auto &s : m_switches) if (switch_closed(s.node, s.position)) closed += ' ' + s.name + ',';)
+	SPIKE1_LOG("devices: " + std::to_string(m_coils.size()) + " coils, " + std::to_string(m_leds.size()) + " LED channels, " +
 		std::to_string(m_switches.size()) + " switches from the game's tables, " + std::to_string(installed) +
 		" balls installed; closed at rest:" + (closed.empty() ? " none" : closed.substr(0, closed.size() - 1)));
 }
@@ -1168,7 +1433,7 @@ int32_t spike1_devices::cpu_spi_message(uint32_t req, uint32_t arg, std::string 
 		if (!p) return -E_FAULT;
 		wire_bytes(0, p, len);
 	}
-	if (m_cfg.trace) note = "cpu spi: " + std::to_string(count) + " transfer(s)";
+	if (tracing()) note = "cpu spi: " + std::to_string(count) + " transfer(s)";
 	return int32_t(total); // spidev answers with the bytes moved
 }
 
@@ -1541,22 +1806,26 @@ void spike1_devices::limit_motors_run(uint64_t now_ns)
 
 static uint32_t ticks_ms(const uint8_t *p) { return uint32_t(p[0] | (p[1] << 8)) * 1000u / NODE_TICK_HZ; }
 
-void spike1_devices::coil_fire(uint8_t node, const uint8_t *data, uint32_t len, uint64_t now_ns, std::string &note)
+void spike1_devices::coil_pulse(uint8_t node, uint8_t index, uint8_t power1, uint32_t ms1, uint8_t power2, uint32_t ms2, uint64_t now_ns)
 {
-	if (len < 9 || data[0] >= COILS_PER_NODE) { note = "node bus: node " + std::to_string(node) + " coil fire not understood: " + bytes_hex(data, len); return; }
-	coil &c = m_coil[node][data[0]];
-	const uint32_t ms1 = ticks_ms(data + 2), ms2 = ticks_ms(data + 5);
-	c.power1 = data[1];
-	c.power2 = data[4];
+	coil &c = m_coil[node][index];
+	c.power1 = power1;
+	c.power2 = power2;
 	c.phase1_end_ns = now_ns + uint64_t(ms1) * 1000000;
 	c.phase2_end_ns = c.phase1_end_ns + uint64_t(ms2) * 1000000;
 	c.holding = false;
 	c.check = (c.power1 ? ms1 : 0) + (c.power2 ? ms2 : 0) < COIL_SHOWN_MIN_MS;
-	if (!c.check && !((m_coil_mask[node] >> data[0]) & 1)) c.shown = std::max({ c.shown, c.power1, c.power2 });
-	if (len > 9 && std::any_of(data + 9, data + len, [](uint8_t b) { return b != 0; }) && first_time("coil fire extras"))
+	if (!c.check && !((m_coil_mask[node] >> index) & 1)) c.shown = std::max({ c.shown, c.power1, c.power2 });
+}
+
+void spike1_devices::coil_fire(uint8_t node, const uint8_t *data, uint32_t len, uint64_t now_ns, std::string &note)
+{
+	if (len < 9 || data[0] >= COILS_PER_NODE) { SPIKE1_DEBUG_ONLY(note = "node bus: node " + std::to_string(node) + " coil fire not understood: " + bytes_hex(data, len);) return; }
+	coil_pulse(node, data[0], data[1], ticks_ms(data + 2), data[4], ticks_ms(data + 5), now_ns);
+	SPIKE1_DEBUG_ONLY(if (len > 9 && std::any_of(data + 9, data + len, [](uint8_t b) { return b != 0; }) && first_time("coil fire extras"))
 		note = "node bus: node " + std::to_string(node) + " coil fire with a time and switch condition (not modelled): " + bytes_hex(data, len);
-	else if (m_cfg.trace)
-		note = "node bus: node " + std::to_string(node) + " coil " + std::to_string(data[0]) + " fire";
+	else if (tracing())
+		note = "node bus: node " + std::to_string(node) + " coil " + std::to_string(data[0]) + " fire";)
 }
 
 void spike1_devices::coil_reflex(uint8_t node, const uint8_t *data, uint32_t len, std::string &note)
@@ -1568,7 +1837,7 @@ void spike1_devices::coil_reflex(uint8_t node, const uint8_t *data, uint32_t len
 	case 34: first = 19; triggers = 3; break;
 	case 43: first = 21; triggers = 3; break;
 	}
-	if (!first || data[0] >= COILS_PER_NODE) { note = "node bus: node " + std::to_string(node) + " coil reflex not understood: " + bytes_hex(data, len); return; }
+	if (!first || data[0] >= COILS_PER_NODE) { SPIKE1_DEBUG_ONLY(note = "node bus: node " + std::to_string(node) + " coil reflex not understood: " + bytes_hex(data, len);) return; }
 	coil &c = m_coil[node][data[0]];
 	c.reflex = false;
 	for (uint32_t i = 0; i < 3; i++) {
@@ -1582,7 +1851,7 @@ void spike1_devices::coil_reflex(uint8_t node, const uint8_t *data, uint32_t len
 	c.reflex_holdoff_ms = ticks_ms(data + 11);
 	c.trigger_was_active = c.reflex && reflex_triggered(node, c);
 	if (!c.reflex) c.holding = false;
-	if (m_cfg.trace) {
+	if (tracing()) {
 		std::string on;
 		for (uint8_t t : c.trigger) if (t & REFLEX_USED) on += (on.empty() ? " reflex on switch " : " or ") + std::to_string(t & REFLEX_POSITION);
 		note = "node bus: node " + std::to_string(node) + " coil " + std::to_string(data[0]) + (c.reflex ? on : " reflex off");
@@ -1820,7 +2089,7 @@ bool spike1_devices::insert_command(const uint8_t *data, uint32_t len, uint64_t 
 		return true;
 	}
 	if ((sub & 0xfc) != 0x98) return false;
-	if ((sub & 3) && first_time("insert channel")) note = "node bus: LCD insert channel " + std::to_string(sub & 3) + " used; the model shows channel 0";
+	SPIKE1_DEBUG_ONLY(if ((sub & 3) && first_time("insert channel")) note = "node bus: LCD insert channel " + std::to_string(sub & 3) + " used; the model shows channel 0";)
 	switch (len) {
 	case 2:
 		c.flags = data[1];
@@ -1835,7 +2104,7 @@ bool spike1_devices::insert_command(const uint8_t *data, uint32_t len, uint64_t 
 		c.shown = c.running = true;
 		c.frame = u32(2);
 		c.last = u32(6);
-		c.period_ns = uint64_t(u16(10)) * 1000000000 / 1280;
+		c.period_ns = uint64_t(u16(10)) * 1000000000ull / 1280;
 		c.start_ns = now_ns;
 		if (len == 22) {
 			c.loop = true;
@@ -1906,7 +2175,7 @@ void spike1_devices::mapped(const handle &h, uint32_t addr, uint32_t len)
 	if (h.type != kind::fb) return;
 	m_fb_addr = addr;
 	m_fb_len = len;
-	log("lcd: the game maps the framebuffer at " + hex(addr) + " (" + std::to_string(len) + " bytes)");
+	SPIKE1_LOG("lcd: the game maps the framebuffer at " + hex(addr) + " (" + std::to_string(len) + " bytes)");
 }
 
 // WWE picks its LCD's attract video when its effect lists are evaluated at start-up, which happens
@@ -1927,7 +2196,7 @@ void spike1_devices::lcd_video_background()
 	if (!m_fb_startup_seen) return;
 	const uint8_t ask = 1;
 	m_fb_background_asked = guest_write(ask_at, &ask, 1);
-	log("lcd: node bus start-up over - the game picks its video background again");
+	SPIKE1_LOG("lcd: node bus start-up over - the game picks its video background again");
 }
 
 int32_t spike1_devices::fb_ioctl(handle &h, uint32_t req, uint32_t arg, uint64_t now_ns, uint64_t &wait_ns, std::string &note)
@@ -1936,10 +2205,10 @@ int32_t spike1_devices::fb_ioctl(handle &h, uint32_t req, uint32_t arg, uint64_t
 	switch (req) {
 	case FBIOGET_VSCREENINFO: { // struct fb_var_screeninfo, 160 bytes
 		uint32_t var[40] = {};
-		var[0] = LCD_WIDTH; var[1] = LCD_HEIGHT;                   // xres, yres
-		var[2] = LCD_WIDTH; var[3] = LCD_HEIGHT * FB_BUFFERS;      // xres_virtual, yres_virtual
+		var[0] = LCD_WIDTH; var[1] = LCD_HEIGHT;              // xres, yres
+		var[2] = LCD_WIDTH; var[3] = LCD_HEIGHT * FB_BUFFERS; // xres_virtual, yres_virtual
 		var[5] = m_fb_yoffset;
-		var[6] = 16;                                               // bits per pixel: RGB565
+		var[6] = 16;                                          // bits per pixel: RGB565
 		var[8] = 11; var[9] = 5; var[11] = 5; var[12] = 6; var[14] = 0; var[15] = 5; // red, green, blue: offset, length
 		return guest_write(arg, var, sizeof(var)) ? 0 : -E_FAULT;
 	}
@@ -1949,7 +2218,7 @@ int32_t spike1_devices::fb_ioctl(handle &h, uint32_t req, uint32_t arg, uint64_t
 		const uint64_t htotal = uint64_t(var[0]) + var[26] + var[27] + var[30], vtotal = uint64_t(var[1]) + var[28] + var[29] + var[31];
 		if (var[25] && htotal && vtotal) {
 			m_fb_frame_ns = std::max<uint64_t>(uint64_t(var[25]) * htotal * vtotal / 1000, 1000000);
-			note = "lcd: " + std::to_string(var[0]) + "x" + std::to_string(var[1]) + " at " + std::to_string(1e9 / double(m_fb_frame_ns)) + " Hz";
+			SPIKE1_DEBUG_ONLY(note = "lcd: " + std::to_string(var[0]) + 'x' + std::to_string(var[1]) + " at " + std::to_string(1e9 / double(m_fb_frame_ns)) + " Hz";)
 		}
 		return 0;
 	}
@@ -1991,7 +2260,7 @@ int32_t spike1_devices::fb_ioctl(handle &h, uint32_t req, uint32_t arg, uint64_t
 		return WAIT;
 	}
 	}
-	if (first_time("ioctl " + h.path + " " + hex(req))) note = "ioctl " + h.path + " request " + hex(req) + " arg " + hex(arg) + ": not modelled";
+	SPIKE1_DEBUG_ONLY(if (first_time("ioctl " + h.path + ' ' + hex(req))) note = "ioctl " + h.path + " request " + hex(req) + " arg " + hex(arg) + ": not modelled";)
 	return 0;
 }
 
@@ -2019,7 +2288,7 @@ bool spike1_devices::provide_video_key(const uint8_t key[16])
 	m_video_key.assign(key, key + 16);
 	if (!needs_video_key()) return true; // the game has its key already
 	if (!guest_write(at, key, 16)) return false;
-	log("lcd: video key provided at " + hex(at));
+	SPIKE1_LOG("lcd: video key provided at " + hex(at));
 	return true;
 }
 
@@ -2027,7 +2296,7 @@ bool spike1_devices::provide_video_key(const uint8_t key[16])
 
 int32_t spike1_devices::audio_write(uint32_t buf, uint32_t len, uint64_t now_ns, uint64_t &wait_ns)
 {
-	const uint64_t buffer_ns = uint64_t(AUDIO_BUFFER_FRAMES) * 1000000000 / m_audio_rate;
+	const uint64_t buffer_ns = uint64_t(AUDIO_BUFFER_FRAMES) * 1000000000ull / m_audio_rate;
 	if (m_audio_until_ns > now_ns + buffer_ns) {
 		wait_ns = m_audio_until_ns - buffer_ns;
 		return WAIT;
@@ -2039,11 +2308,12 @@ int32_t spike1_devices::audio_write(uint32_t buf, uint32_t len, uint64_t now_ns,
 	for (const auto &pot : m_digipots)
 		if (pot.slave == AUDIO_VOLUME_POT)
 			for (int c = 0; c < 2; c++) wiper[c] = std::min<int32_t>(pot.reg[c], POT_FULL_SCALE);
+	//m_audio.reserve(m_audio.size() + frames*2);
 	for (uint32_t i = 0; i < frames * 2; i++)
 		m_audio.push_back(int16_t(int32_t(int16_t(p[2 * i] | (p[2 * i + 1] << 8))) * wiper[i & 1] / POT_FULL_SCALE));
 	const size_t limit = size_t(m_audio_rate) * 2;
 	if (m_audio.size() > limit) m_audio.erase(m_audio.begin(), m_audio.begin() + (m_audio.size() - limit));
-	m_audio_until_ns = std::max(m_audio_until_ns, now_ns) + uint64_t(frames) * 1000000000 / m_audio_rate;
+	m_audio_until_ns = std::max(m_audio_until_ns, now_ns) + uint64_t(frames) * 1000000000ull / m_audio_rate;
 	return int32_t(len);
 }
 
@@ -2150,7 +2420,7 @@ void spike1_devices::apply_manual_numbers(const std::vector<std::pair<int, size_
 	}
 	for (switch_info &sw : m_switches)
 		if (toppers.count(sw.node)) sw.number = uint16_t(sw.number + TOPPER_SWITCH_BASE);
-	log("devices: the manual's numbers for " + std::to_string(switches) + " of " + std::to_string(m_switches.size()) + " switches, " +
+	SPIKE1_LOG("devices: the manual's numbers for " + std::to_string(switches) + " of " + std::to_string(m_switches.size()) + " switches, " +
 		std::to_string(coils) + " of " + std::to_string(m_coils.size()) + " coils and " +
 		std::to_string(leds) + " of " + std::to_string(m_leds.size()) + " LED channels");
 }

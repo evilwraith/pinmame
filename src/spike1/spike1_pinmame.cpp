@@ -1,6 +1,6 @@
 // license:BSD-3-Clause
 
-// PinMAME Spike 1 subsystem - the PinMAME-facing side of the machine
+// PinMAME SPIKE 1 subsystem - the PinMAME-facing side of the machine
 //
 // src/wpc/spike1.c is compiled as part of PinMAME and knows nothing about the subsystem's C++
 // types; the functions below (spike1_public.h) are the whole contract between them. The title's
@@ -15,6 +15,7 @@
 
 #include "spike1_public.h"
 #include "spike1_cpu.h"
+#include "spike1_debug.h"
 #include "spike1_linux.h"
 #include "spike1_memory.h"
 #include "spike1_native.h"
@@ -31,8 +32,7 @@ extern machine_config *p2k_active_config;
 
 namespace {
 
-// The shim's device world for one machine: its config, the CPU's address space over the guest
-// memory, and Linux on top
+// The shim's device world for one machine: its config, the CPU's address space over the guest memory, and Linux on top
 struct machine
 {
 	running_machine running;
@@ -44,7 +44,11 @@ struct machine
 };
 
 std::unique_ptr<machine> g_machine;
+#if SPIKE1_DEBUG
 bool g_log_all = false;
+#else
+constexpr bool g_log_all = false; // without SPIKE1_DEBUG the subsystem only reports a stop and the NVRAM's fate
+#endif
 
 // The native machine, when it runs. It answers the game from a thread of its own, started at the
 // first run(); every use of its devices holds its lock (native_guard())
@@ -92,7 +96,7 @@ void log_line(const std::string &line)
 }
 
 // The game program as itself, when the host can: false (and the emulated machine runs) otherwise
-bool start_native(const char *game, const spike1_file *files, unsigned count, const spike1_symbol *symbols,
+bool start_native(const char *game, const char *program, const spike1_file *files, unsigned count, const spike1_symbol *symbols,
                   const unsigned char *nvram, unsigned nvram_size)
 {
 	const char *env = std::getenv("SPIKE1_NATIVE");
@@ -104,6 +108,7 @@ bool start_native(const char *game, const spike1_file *files, unsigned count, co
 	}
 	spike1_native::config cfg;
 	cfg.folder = game ? game : "";
+	cfg.program = program ? program : "game";
 	for (unsigned i = 0; i < count; i++)
 		if (files[i].name && files[i].data) cfg.files.push_back({ files[i].name, files[i].data, files[i].size });
 	for (const spike1_symbol *s = symbols; s && s->name; s++) cfg.symbols.push_back({ s->name, s->address, s->size });
@@ -125,13 +130,15 @@ bool start_native(const char *game, const spike1_file *files, unsigned count, co
 
 extern "C" {
 
-int spike1_pinmame_start(const char *game, const spike1_file *files, unsigned count, const spike1_symbol *symbols,
+int spike1_pinmame_start(const char *game, const char *program, const spike1_file *files, unsigned count, const spike1_symbol *symbols,
                          const unsigned char *nvram, unsigned nvram_size, char *error, unsigned error_size)
 {
 	g_machine.reset();
 	g_native.reset();
+#if SPIKE1_DEBUG
 	g_log_all = std::getenv("SPIKE1_LOG") != nullptr; // SPIKE1_LOG=1: the subsystem's whole log on stderr
-	if (start_native(game, files, count, symbols, nvram, nvram_size)) return 1;
+#endif
+	if (start_native(game, program, files, count, symbols, nvram, nvram_size)) return 1;
 	auto m = std::make_unique<machine>();
 	device_t::s_machine = &m->running;
 	p2k_active_config = &m->config;
@@ -147,14 +154,16 @@ int spike1_pinmame_start(const char *game, const spike1_file *files, unsigned co
 
 	spike1_linux::config cfg;
 	const std::string dir = std::string("/games/") + (game ? game : "");
-	// A set's files sit side by side; on the card a title's LCD clips (.spv) are in its video folder
+	// A set's files sit side by side; on the card a title's LCD clips (.spv) are in its video folder,
+	// and the ELG titles' sounds (.wav) in its sounds folder
+	auto ends_with = [](const std::string &name, const char *ext) { return name.size() > 4 && name.compare(name.size() - 4, 4, ext) == 0; };
 	for (unsigned i = 0; i < count; i++)
 		if (files[i].name && files[i].data) {
-			const std::string name = files[i].name;
-			const bool clip = name.size() > 4 && name.compare(name.size() - 4, 4, ".spv") == 0;
-			cfg.files.push_back({ dir + (clip ? "/video/" : "/") + name, files[i].data, files[i].size });
+			const std::string& name = files[i].name;
+			const char *sub = ends_with(name, ".spv") ? "/video/" : ends_with(name, ".wav") ? "/sounds/" : "/";
+			cfg.files.push_back({ dir + sub + name, files[i].data, files[i].size });
 		}
-	cfg.executable = dir + "/game";
+	cfg.executable = dir + "/" + (program ? program : "game");
 	for (const spike1_symbol *s = symbols; s && s->name; s++) cfg.symbols.push_back({ s->name, s->address, s->size });
 	cfg.environment = { "HOME=/root", "PATH=/bin:/usr/bin:/usr/local/bin", "LANG=C", "LC_ALL=C", "GAMES_PATH=/games" };
 	cfg.clock_hz = SPIKE1_CPU_HZ;
@@ -397,6 +406,14 @@ unsigned spike1_pinmame_rgb(unsigned short *rgb565)
 	return unsigned(d->rgb_frame_count());
 }
 
+unsigned spike1_pinmame_alnum(unsigned char *levels)
+{
+	const spike1_devices *d = devices();
+	if (!d) return 0;
+	if (levels) std::memcpy(levels, d->alnum_frame(), SPIKE1_ALNUM_CHARS * SPIKE1_ALNUM_SEGMENTS);
+	return unsigned(d->alnum_frame_count());
+}
+
 int spike1_pinmame_display_link(const char *target)
 {
 	const auto guard = native_guard();
@@ -440,3 +457,4 @@ static_assert(SPIKE1_LED_MOTOR == spike1_devices::LED_KIND_MOTOR, "the LED class
 static_assert(SPIKE1_DMD_WIDTH == spike1_devices::DMD_WIDTH && SPIKE1_DMD_HEIGHT == spike1_devices::DMD_HEIGHT, "the DMD sizes differ");
 static_assert(SPIKE1_INSERT_WIDTH == spike1_devices::INSERT_WIDTH && SPIKE1_INSERT_HEIGHT == spike1_devices::INSERT_HEIGHT, "the insert sizes differ");
 static_assert(SPIKE1_RGB_WIDTH == spike1_devices::RGB_WIDTH && SPIKE1_RGB_HEIGHT == spike1_devices::RGB_HEIGHT, "the RGB matrix sizes differ");
+static_assert(SPIKE1_ALNUM_CHARS == spike1_devices::ALNUM_CHARS && SPIKE1_ALNUM_SEGMENTS == spike1_devices::ALNUM_SEGMENTS, "the alphanumeric display sizes differ");
