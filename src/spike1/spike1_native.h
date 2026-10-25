@@ -57,7 +57,8 @@ public:
 	struct named_address { std::string name; uint32_t address = 0, size = 0; };
 	struct config
 	{
-		std::string folder;                   // the game folder: the program runs as /games/<folder>/game
+		std::string folder;                   // the game folder: the program runs as /games/<folder>/<program>
+		std::string program = "game";         // the folder's program the machine runs (Transformers The Pin: "gamer")
 		std::vector<file> files;              // the folder's files; the caller keeps the bytes alive until stop()
 		std::vector<named_address> symbols;   // for a program without a symbol table
 		std::vector<uint8_t> nvram;           // what nvram() gave the last time (spike1_linux's format); empty for a new machine

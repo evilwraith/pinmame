@@ -349,7 +349,7 @@ bool spike1_native::start(const config &cfg, std::string &error)
 	m_cfg = cfg;
 	if (!supported(error)) return false;
 	const file *program = nullptr;
-	for (const file &f : m_cfg.files) if (f.name == "game") program = &f;
+	for (const file &f : m_cfg.files) if (f.name == m_cfg.program) program = &f;
 	if (!program || program->size < 52) { error = "the set has no game program"; return false; }
 
 	// the program's symbol table, as spike1_linux::load_elf reads it: objects and functions
@@ -443,23 +443,28 @@ bool spike1_native::spawn(std::string &error)
 	std::vector<child_plan::dir> dirs;
 	std::vector<child_plan::wfile> files;
 	std::vector<child_plan::bind> binds;
-	bool video = false;
-	for (const file &f : m_cfg.files) if (f.name.size() > 4 && f.name.compare(f.name.size() - 4, 4, ".spv") == 0) video = true;
+	// where a title's files sit on the card, as spike1_pinmame_start lays them out for the emulated
+	// machine: LCD clips (.spv) in video/, the ELG titles' sounds (.wav) in sounds/
+	auto ends_with = [](const std::string &name, const char *ext) { return name.size() > 4 && name.compare(name.size() - 4, 4, ext) == 0; };
+	auto sub_of = [&](const std::string &name) { return ends_with(name, ".spv") ? "/video/" : ends_with(name, ".wav") ? "/sounds/" : "/"; };
+	bool video = false, sounds = false;
+	for (const file &f : m_cfg.files) { video |= ends_with(f.name, ".spv"); sounds |= ends_with(f.name, ".wav"); }
 	dirs.push_back({ keep(root + "/games"), 0755 });
 	dirs.push_back({ keep(games), 0755 });
 	if (video) dirs.push_back({ keep(games + "/video"), 0755 });
+	if (sounds) dirs.push_back({ keep(games + "/sounds"), 0755 });
 	dirs.push_back({ keep(root + "/data"), 0755 });
 	dirs.push_back({ keep(root + "/tmp"), 01777 });
 	dirs.push_back({ keep(root + "/dev"), 0755 });
 	for (const file &f : m_cfg.files) {
-		const bool clip = f.name.size() > 4 && f.name.compare(f.name.size() - 4, 4, ".spv") == 0;
-		const std::string to = games + (clip ? "/video/" : "/") + f.name;
-		const std::string from = f.name == "game" ? std::string() : mapped_file(f.data, f.size);
+		const bool prog = f.name == m_cfg.program;
+		const std::string to = games + sub_of(f.name) + f.name;
+		const std::string from = prog ? std::string() : mapped_file(f.data, f.size);
 		if (!from.empty()) binds.push_back({ keep(from), keep(to) });
-		else if (f.size <= SMALL_FILE || f.name == "game") files.push_back({ keep(to), f.data, f.size, mode_t(f.name == "game" ? 0755 : 0444) });
+		else if (f.size <= SMALL_FILE || prog) files.push_back({ keep(to), f.data, f.size, mode_t(prog ? 0755 : 0444) });
 		else { error = f.name + " is not a whole file on disk (a set in a zip?), which a native run needs"; return false; }
 	}
-	const std::string exec_path = "/games/" + m_cfg.folder + "/game";
+	const std::string exec_path = "/games/" + m_cfg.folder + "/" + m_cfg.program;
 	std::vector<char *> argv{ const_cast<char *>(keep(exec_path)), nullptr };
 	std::vector<std::string> env = m_cfg.environment;
 	if (env.empty()) env = { "HOME=/root", "PATH=/bin:/usr/bin:/usr/local/bin", "LANG=C", "LC_ALL=C", "GAMES_PATH=/games" };
