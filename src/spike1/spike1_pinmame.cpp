@@ -96,7 +96,7 @@ void log_line(const std::string &line)
 }
 
 // The game program as itself, when the host can: false (and the emulated machine runs) otherwise
-bool start_native(const char *game, const spike1_file *files, unsigned count, const spike1_symbol *symbols,
+bool start_native(const char *game, const char *program, const spike1_file *files, unsigned count, const spike1_symbol *symbols,
                   const unsigned char *nvram, unsigned nvram_size)
 {
 	const char *env = std::getenv("SPIKE1_NATIVE");
@@ -108,6 +108,7 @@ bool start_native(const char *game, const spike1_file *files, unsigned count, co
 	}
 	spike1_native::config cfg;
 	cfg.folder = game ? game : "";
+	cfg.program = program ? program : "game";
 	for (unsigned i = 0; i < count; i++)
 		if (files[i].name && files[i].data) cfg.files.push_back({ files[i].name, files[i].data, files[i].size });
 	for (const spike1_symbol *s = symbols; s && s->name; s++) cfg.symbols.push_back({ s->name, s->address, s->size });
@@ -137,7 +138,7 @@ int spike1_pinmame_start(const char *game, const char *program, const spike1_fil
 #if SPIKE1_DEBUG
 	g_log_all = std::getenv("SPIKE1_LOG") != nullptr; // SPIKE1_LOG=1: the subsystem's whole log on stderr
 #endif
-	if (start_native(game, files, count, symbols, nvram, nvram_size)) return 1;
+	if (start_native(game, program, files, count, symbols, nvram, nvram_size)) return 1;
 	auto m = std::make_unique<machine>();
 	device_t::s_machine = &m->running;
 	p2k_active_config = &m->config;
