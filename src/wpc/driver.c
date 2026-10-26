@@ -1058,7 +1058,7 @@ DRIVERNV(formula1)      //Formula 1 (??/1988)
 DRIVERNV(leking)        //Le King (??/1983)
 DRIVERNV(olympic)       //Olympic Games (??/1984)
 DRIVERNV(jpapillon)     //Papillon (12/1984)
-DRIVERNV(apocalypse_now)//Apocalypse Now (??/1985)
+DRIVERNV(apclpsnw)      //Apocalypse Now (??/1985)
                         //Apocalypse Now (??/1986)
 
 // ----------------
@@ -1478,7 +1478,9 @@ DRIVERNV(topgamet)      // 19?? - Top Game Turbo (Bingo)
 DRIVERNV(pinheck)       // PinHeck System (not a game)
 DRIVERNV(amh_022)       // 2014 - America's Most Haunted (V22)
 DRIVERNV(amh_023)       // 2014 - America's Most Haunted (V23)
+DRIVERNV(dominos_005)   // 2016 - Domino's Spectacular Pinball Adventure (V5)
 DRIVERNV(dominos_006)   // 2016 - Domino's Spectacular Pinball Adventure (V6)
+DRIVERNV(rzspook_019)   // 2016 - Rob Zombie's Spookshow International (V19)
 DRIVERNV(rzspook_026)   // 2016 - Rob Zombie's Spookshow International (V26)
 DRIVERNV(jetsons_004)   // 2017 - Jetsons, The (V4)
 

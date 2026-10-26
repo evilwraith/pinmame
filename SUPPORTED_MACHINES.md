@@ -308,7 +308,7 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | Touchdown                                      | 1984 | Gottlieb               | Alphanumeric | `touchdn`                                            |             |       |
 | UFO-X                                          | 1984 | Playmatic              | Alphanumeric | `ufo_x`                                              |             |       |
 | Andromeda                                      | 1985 | Game Plan              | Alphanumeric | `andromea`, `andromed`                               |             |       |
-| Apocalypse Now                                 | 1985 | Jeutel                 | Alphanumeric | `apocalypse_now`                                     |             |       |
+| Apocalypse Now                                 | 1985 | Jeutel                 | Alphanumeric | `apclpsnw`                                           |             |       |
 | Ator                                           | 1985 | Videodens              | Alphanumeric | `ator`, `ator2`                                      |             |       |
 | Beat the Clock                                 | 1985 | Bally                  | Alphanumeric | `beatclc2`, `beatclck`                               |             |       |
 | Bounty Hunter                                  | 1985 | Gottlieb               | Alphanumeric | `bountgfp`, `bounthfp`, `bountyh` + 1 more           |             |       |
@@ -617,10 +617,10 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | The Rolling Stones                             | 2011 | Stern                  | DMD          | `rsn_100h`, `rsn_103`, `rsn_105` + 2 more            |             |       |
 | Transformers                                   | 2011 | Stern                  | DMD          | `tf_088h`, `tf_100h`, `tf_120` + 10 more             |             |       |
 | AC/DC                                          | 2012 | Stern                  | DMD          | `acd_121`, `acd_125`, `acd_130` + 21 more            |             |       |
-| The Avengers                                   | 2012 | Stern                  | DMD          | `avs_110`, `avs_120h`, `avs_140` + 3 more            |             |       |
+| The Avengers                                   | 2012 | Stern                  | DMD          | `avs_110`, `avs_120h`, `avs_140` + 5 more            |             |       |
 | Transformers The Pin                           | 2012 | Stern                  | Alphanumeric | `tfcp_1018`                                          |             |       |
 | X-Men                                          | 2012 | Stern                  | DMD          | `xmn_100`, `xmn_102`, `xmn_104` + 14 more            |             |       |
-| Avengers the Pin                               | 2013 | Stern                  | DMD          | `avscp_103`, `avs_170`, `avs_170c`                   |             |       |
+| Avengers the Pin                               | 2013 | Stern                  | Alphanumeric | `avscp_103`                                          |             |       |
 | Metallica                                      | 2013 | Stern                  | DMD          | `mtl_052`, `mtl_103`, `mtl_105` + 31 more            |             |       |
 | Star Trek                                      | 2013 | Stern                  | DMD          | `st_120`, `st_130`, `st_140` + 15 more               |             |       |
 | America's Most Haunted                         | 2014 | Spooky Pinball         | DMD          | `amh_022`, `amh_023`                                 | yes         |       |
@@ -629,7 +629,7 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | Game of Thrones                                | 2015 | Stern                  | DMD          | `got_137`, `got_137h`                                |             |       |
 | Whoa Nellie / PBR                              | 2015 | Stern                  | Reels        | `wnbjm_155`, `pabst_101`, `primus_103`               |             |       |
 | WrestleMania                                   | 2015 | Stern                  | DMD          | `wwe_135h`                                           |             |       |
-| Domino's Spectacular Pinball Adventure         | 2016 | Spooky Pinball         | DMD          | `dominos_006`                                        | yes         |       |
+| Domino's Spectacular Pinball Adventure         | 2016 | Spooky Pinball         | DMD          | `dominos_005`, `dominos_006`                         | yes         |       |
 | Ghostbusters                                   | 2016 | Stern                  | DMD          | `gbust_117h`                                         |             |       |
 | Rob Zombie's Spookshow International           | 2016 | Spooky Pinball         | DMD          | `rzspook_026`                                        | yes         |       |
 | The Jetsons                                    | 2017 | Spooky Pinball         | DMD          | `jetsons_004`                                        | yes         |       |
@@ -1148,8 +1148,8 @@ scripts/gen_supported_machines.py
 
 The script reads a cached copy of OPDB and re-downloads only with `--refresh`; `--check`
 fails if this file is out of date. Machine data comes from the OPDB snapshot of
-**2026-10-25**; driver data from `src/wpc` at the commit this file was generated from, on
-**2026-10-25**.
+**2026-10-26**; driver data from `src/wpc` at the commit this file was generated from, on
+**2026-10-26**.
 
 A machine is one OPDB *group*, so a title and its remakes are one row, dated and credited
 to the original. Its status is that of the *worst* of its ROM sets, so "fully working"

@@ -1,4 +1,4 @@
-# Stern Spike 1
+# Stern SPIKE 1
 
 Stern's first SPIKE platform (2012 to 2020: Game of Thrones, KISS, Wrestlemania, Ghostbusters, ...). The
 game runs as a statically linked ARMv5TE Linux program on an ARM926-class CPU board and talks to
@@ -72,15 +72,17 @@ From MAME 0.288 (tag `mame0288`, commit `27a8d9e`), `src/devices/cpu/arm7/`: `ar
 | `arm7.cpp`, `arm7core.h` | `ARM7_PINMAME_DIRECT_FETCH` (default on): instructions are fetched straight from the address space, not through the modelled prefetch queue - nothing to model with the MMU off and no self-modifying code, and measured ~28% faster |
 | `arm7.cpp` | no debugger console commands |
 | `arm7ops.cpp` BLX (register) | **bug fix**: read the target before writing the link register. `blx lr`, which glibc's `clone()` uses to call a new thread's start routine, branched to its own return address (the Thumb form was already right) |
+| `arm7.h`, `arm7core.hxx`, `arm7.cpp`, `arm7thmb.cpp` | `set_fault_handler()`: an undefined instruction or an emulation dead end (`fatalerror`) calls the host, which stops the game, instead of taking the undefined instruction vector or aborting the process |
+| `arm7ops.cpp` `arm7ops_4567`, `arm9ops_undef` | **bug fix**: undefined ARM instructions trap. A register offset LDR/STR with bit 4 set (e.g. `UDF`, from `__builtin_trap`) ran as a load or store, and the unconditional space (cond = 0xF) skipped unknown instructions |
+| `arm7ops.cpp` `arm9ops_57` | PLD is valid (a no-op) from ARMv5TE, not only from ARMv6: it would trap now, and glibc's `memcpy` uses it |
+| `arm7ops.cpp` `HandleALU` | **bug fix**: a register operand with an immediate shift takes no extra cycle, only a register specified shift does (e.g. every `add r0, r1, r2` was charged one cycle too many) |
 
 The core uses the existing MAME compatibility layer of the Pinball 2000 subsystem (`src/p2k/shim`), with a
-few additions for modern MAME's arm7: `rotr_32`, `population_count_32`, `mul_32x32_shift`,
-`util::sext`, the `TR_*` translation intents, `address_map_constructor`, the four-argument
-`memory_translate()`, `address_space::read_ptr()`/`endianness()`, `total_cycles()` and
-`currently_executing()`.
+few additions for modern MAME's arm7: the `TR_*` translation intents, `address_map_constructor`, the four-argument
+`memory_translate()`, `address_space::read_ptr()`/`endianness()`, `total_cycles()` and `currently_executing()`.
 
 Speed, measured with real game functions on an i7-13700KF: about 93 M instructions/s as imported,
-about 118 M/s with the direct fetch. A Spike 1 game needs about 36 M/s in attract mode and 50-61
+about 118 M/s with the direct fetch. A SPIKE 1 game needs about 36 M/s in attract mode and 50-61
 M/s in play once the line-sense thread waits for its ADC samples as it does on the real board,
 and the sound thread for its DAC.
 
@@ -511,7 +513,7 @@ model takes it for a program with `node_query_t()` and `nodemap_init()` (`elg_*`
   `Controller.GetMech(0)` is the motor's position (leave `HandleMechanics` at its default). The
   table needs the `PinMAMETimer` and `PulseTimer` timers core.vbs drives, and switch pulses go
   through `vpmTimer.PulseSw`: the plugin's controller has no `PulseSwitch`. The system script is
-  `spike1.vbs`, which is not in this repository (it goes in VPX's Scripts folder, beside `sam.vbs`): a table defines
+  `spike1.vbs`, which is not in this repository (but in VPX's Scripts folder): a table defines
   `cGameName` and calls `LoadVPM "", "spike1.vbs", 3.61`, and the script sets the title's cabinet
   switches (`swCoin1`-`swCoin4`, `swStartButton`, `swTournament`, `swLaunch`, `swTilt`,
   `swSlamTilt`, the flipper buttons' leaves) from the set name, as each title numbers them its own
@@ -533,7 +535,7 @@ GI and insert LEDs light. In `PinMAME.exe` (Windows x64) the set passes `-verify
 attract mode with the DMD and the insert drawn, takes coins and starts a game from the keyboard,
 plays the coin sounds and the start music, and keeps its NVRAM across a restart - at 60 frames
 per second, the machine taking about half of one core of an i7-13700KF. Through libpinmame, in
-VPX 10.8.1 (Rev 6113) with its PinMAME plugin, a converted Ghostbusters LE table plays: DMD and
+VPX 10.8.1 with its PinMAME plugin, a converted Ghostbusters LE table plays: DMD and
 insert, lamps and GI, coils, switches, sound and Slimer's motor. In the harness, Slimer homes at
 power-on and at each game start; the service menu's SLIMER MOTOR TEST moves it to each position it
 asks for (42, 50, 60) and reads it back, and SLIMER MOTOR CALIBRATION ends "COMPLETE: PASSED"
