@@ -133,6 +133,7 @@ private:
    void UnmapShm();
    bool SpawnChild(const std::string& gameDir);
    static std::string FindHost(const std::string& gameDir);
+   static std::string PythonFor(const std::string& gameDir, const std::string& host);
    static std::vector<std::string> ChildEnvironment();
    void ReapChild();
 

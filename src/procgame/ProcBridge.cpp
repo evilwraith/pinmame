@@ -354,12 +354,37 @@ std::vector<std::string> ProcBridge::ChildEnvironment()
    return envStrings;
 }
 
+// The interpreter for a game. A port (skeleton/port.py, port.sh) says so on its config.yaml's
+// first line and runs on the system's python3. Anything else is a game as it was distributed --
+// pyprocgame and SkeletonGame were Python 2 frameworks -- and runs on the Python 2.7 the runtime
+// carries beside the host script (py27/), when it carries one. VPX_PROC_PYTHON overrides both.
+std::string ProcBridge::PythonFor(const std::string& gameDir, const std::string& host)
+{
+   const std::string forced = EnvOr("VPX_PROC_PYTHON", "");
+   if (!forced.empty())
+      return forced;
+   bool ported = false;
+   if (FILE* f = fopen((gameDir + "/config.yaml").c_str(), "r")) {
+      char line[256] = { 0 };
+      if (fgets(line, sizeof(line), f))
+         ported = strstr(line, "Rewritten by backport/proc/") != nullptr;
+      fclose(f);
+   }
+   if (!ported) {
+      const size_t slash = host.find_last_of('/');
+      const std::string py27 = (slash == std::string::npos ? std::string(".") : host.substr(0, slash)) + "/py27/bin/python2.7";
+      if (FileExists(py27))
+         return py27;
+   }
+   return "python3";
+}
+
 bool ProcBridge::SpawnChild(const std::string& gameDir)
 {
    // Where the host script lives and which interpreter runs it are settings,
    // not constants: the cart layout differs between the trees and the desktop.
-   const std::string python = EnvOr("VPX_PROC_PYTHON", "python3");
    const std::string host = FindHost(gameDir);
+   const std::string python = PythonFor(gameDir, host);
    if (host.empty()) {
       m_lastError = "procbridge_host.py not found beside libpinmame or " + gameDir;
       return false;
