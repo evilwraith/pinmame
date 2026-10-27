@@ -438,6 +438,7 @@ bool ProcBridge::Start(const std::string& gameDir)
       m_lastError = "game directory not found: " + gameDir;
       return false;
    }
+   m_gameDir = gameDir;
    LoadPalette(gameDir);
    if (!MapShm())
       return false;
@@ -463,8 +464,12 @@ bool ProcBridge::WaitReady(uint32_t timeoutMs)
          m_lastError = "pyprocgame child reported an error during setup";
          return false;
       }
-      if (m_pShm->gameReady)
+      if (m_pShm->gameReady) {
+         // Again now: a game run as distributed derives its palette from its dot images during
+         // setup (the runtime's procbridge/palette.py), after Start() first looked for one
+         LoadPalette(m_gameDir);
          return true;
+      }
       if (!ChildAlive()) {
          m_lastError = "pyprocgame child exited before the game was ready";
          return false;

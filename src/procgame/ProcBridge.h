@@ -139,6 +139,7 @@ private:
    ProcShm* m_pShm = nullptr;
    int m_shmFd = -1;
    std::string m_shmName;
+   std::string m_gameDir;
    int m_childPid = -1;
    std::string m_lastError;
 
