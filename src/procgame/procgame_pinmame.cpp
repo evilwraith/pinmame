@@ -20,7 +20,7 @@ namespace {
 std::unique_ptr<procgame::ProcBridge> bridge;
 // The game the host named for the next start
 std::string gameDir;
-// Set when the game process is seen gone, with why; procgame_running() keeps answering it
+// Set when the game process is seen gone or did not start, with why; procgame_running() keeps answering it
 std::string stopped;
 // The frame as the game drew it, before the palette (pyprocgame) or as RGB24 (SkeletonGame)
 unsigned char frame[PROC_HD_MAX_BYTES];
@@ -54,7 +54,8 @@ extern "C" int procgame_start(const char *game_dir, unsigned timeout_ms, char *e
    stopped.clear();
    bridge = std::make_unique<procgame::ProcBridge>();
    if (!bridge->Start(game_dir ? game_dir : "") || !bridge->WaitReady(timeout_ms)) {
-      copy_text(bridge->LastError(), error, error_size);
+      stopped = bridge->LastError(); /* procgame_running() answers it from now on */
+      copy_text(stopped, error, error_size);
       bridge.reset();
       return 0;
    }

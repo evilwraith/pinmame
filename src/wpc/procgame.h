@@ -20,6 +20,9 @@ void procgamecpu_set_reg(int regnum, unsigned val);
 void procgamecpu_set_irq_line(int irqline, int state);
 void procgamecpu_set_irq_callback(int (*callback)(int irqline));
 const char *procgamecpu_info(void *context, int regnum);
+
+/* Why the procgame machine's game did not start, set in its machine init; empty when it started */
+const char *procgame_start_error(void);
 unsigned procgamecpu_dasm(char *buffer, unsigned pc);
 
 #endif

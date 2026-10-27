@@ -4185,6 +4185,9 @@ PINMAMEAPI PINMAME_STATUS PinmameSetGameDef(const uint8_t* game, size_t gameSize
 
 #if HAS_PROCGAME
 #include "../procgame/procgame_public.h"
+extern "C" {
+#include "procgame.h"
+}
 #endif
 
 PINMAMEAPI PINMAME_STATUS PinmameSetProcGameDir(const char* const p_dir)
@@ -4199,6 +4202,22 @@ PINMAMEAPI PINMAME_STATUS PinmameSetProcGameDir(const char* const p_dir)
 	return PINMAME_STATUS_OK;
 #else
 	(void)p_dir;
+	return PINMAME_STATUS_GAME_NOT_FOUND;
+#endif
+}
+
+PINMAMEAPI PINMAME_STATUS PinmameGetProcGameError(char* const p_buffer, const int size)
+{
+	if (p_buffer && size > 0)
+		p_buffer[0] = 0;
+#if HAS_PROCGAME
+	// written in the driver's machine init, before the running state
+	if (PinmameIsRunning() != 1)
+		return PINMAME_STATUS_EMULATOR_NOT_RUNNING;
+	if (p_buffer && size > 0 && strcmp(Machine->gamedrv->name, "procgame") == 0)
+		snprintf(p_buffer, size, "%s", procgame_start_error());
+	return PINMAME_STATUS_OK;
+#else
 	return PINMAME_STATUS_GAME_NOT_FOUND;
 #endif
 }

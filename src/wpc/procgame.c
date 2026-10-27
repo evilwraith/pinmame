@@ -341,10 +341,16 @@ static void procgame_size_display(unsigned width, unsigned height)
   memcpy(&procgameDisp[0], &sized, sizeof(sized));
 }
 
+/* Why the game did not start, for the host (PinmameGetProcGameError): written here, in the
+   machine init, before the machine reports it runs; empty when it started */
+static char procgame_startError[320];
+
+const char *procgame_start_error(void) { return procgame_startError; }
+
 static MACHINE_INIT(procgame)
 {
   const char *const dir = procgame_game_dir();
-  char error[256];
+  char error[320];
   int m;
 
   memset(&locals, 0, sizeof(locals));
@@ -363,7 +369,9 @@ static MACHINE_INIT(procgame)
   for (m = 0; m < PROCGAME_MAXSW; m++) locals.swSeen[m] = procgame_swChanges[m];
   core_swChangedHook = procgame_swChanged;
 
+  procgame_startError[0] = 0;
   if (!procgame_is_game_dir(dir)) {
+    snprintf(procgame_startError, sizeof(procgame_startError), "'%s' holds no game (no config.yaml or config/machine.yaml)", dir);
     logerror("P-ROC game: '%s' holds no game (no config.yaml or config/machine.yaml)\n", dir);
     usrintf_showmessage_secs(30, "P-ROC game: '%s' holds no game", dir);
     return;
@@ -371,6 +379,7 @@ static MACHINE_INIT(procgame)
   /* The game sets itself up here - seconds - before the machine reports it runs, so a host waiting
      for that (VPX's Controller.Run) starts the table on a game that is ready for its switches */
   if (!procgame_start(dir, 0, error, sizeof(error))) {
+    snprintf(procgame_startError, sizeof(procgame_startError), "%s", error[0] ? error : "the game did not start");
     logerror("P-ROC game: %s does not start: %s\n", dir, error);
     usrintf_showmessage_secs(30, "P-ROC game: the game does not start: %s", error);
     return;

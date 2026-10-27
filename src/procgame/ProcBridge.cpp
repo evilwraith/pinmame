@@ -1,6 +1,7 @@
 #include "ProcBridge.h"
 
 #include <atomic>
+#include <cctype>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +35,34 @@ static std::string EnvOr(const char* name, const char* fallback)
 {
    const char* v = getenv(name);
    return (v && *v) ? std::string(v) : std::string(fallback);
+}
+
+// The game's last Python error, from the log the child writes beside it ("ImportError: No module
+// named procgame"): the line a traceback ends with. Empty when there is none
+static std::string LastPythonError(const std::string& gameDir)
+{
+   FILE* f = fopen((gameDir + "/procbridge_host.log").c_str(), "r");
+   if (!f)
+      return std::string();
+   std::string last;
+   char line[512];
+   while (fgets(line, sizeof(line), f)) {
+      std::string l(line);
+      while (!l.empty() && (l.back() == '\n' || l.back() == '\r'))
+         l.pop_back();
+      // An exception line starts at column 0 with a dotted name, then ':' or the end
+      size_t n = 0;
+      while (n < l.size() && (isalnum((unsigned char)l[n]) || l[n] == '_' || l[n] == '.'))
+         n++;
+      if (n == 0 || (n < l.size() && l[n] != ':'))
+         continue;
+      const std::string name = l.substr(0, n);
+      if (name.find("Error") != std::string::npos || name.find("Exception") != std::string::npos
+          || name == "SystemExit" || name == "KeyboardInterrupt")
+         last = l.substr(0, 300);
+   }
+   fclose(f);
+   return last;
 }
 
 static bool DirExists(const std::string& path)
@@ -486,7 +515,9 @@ bool ProcBridge::WaitReady(uint32_t timeoutMs)
    // loading screen -- never on a frame.
    for (uint32_t waited = 0; waited < timeoutMs; waited += 10) {
       if (m_pShm->gameError) {
-         m_lastError = "pyprocgame child reported an error during setup";
+         m_lastError = "the game reported an error during setup";
+         if (const std::string why = LastPythonError(m_gameDir); !why.empty())
+            m_lastError += ": " + why;
          return false;
       }
       if (m_pShm->gameReady) {
@@ -496,12 +527,14 @@ bool ProcBridge::WaitReady(uint32_t timeoutMs)
          return true;
       }
       if (!ChildAlive()) {
-         m_lastError = "pyprocgame child exited before the game was ready";
+         m_lastError = "the game process exited before the game was ready";
+         if (const std::string why = LastPythonError(m_gameDir); !why.empty())
+            m_lastError += ": " + why;
          return false;
       }
       usleep(10 * 1000);
    }
-   m_lastError = "timed out waiting for the pyprocgame child";
+   m_lastError = "timed out waiting for the game to set up";
    return false;
 }
 

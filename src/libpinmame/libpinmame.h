@@ -616,3 +616,9 @@ PINMAMEAPI PINMAME_STATUS PinmameSetGameDef(const uint8_t* game, size_t gameSize
 // config/machine.yaml. It applies to every following PinmameRun() of that set until replaced; set it before the game is
 // started (PINMAME_STATUS_GAME_ALREADY_RUNNING otherwise). PINMAME_STATUS_GAME_NOT_FOUND in a build without P-ROC games
 PINMAMEAPI PINMAME_STATUS PinmameSetProcGameDir(const char* const p_dir);
+
+// Why the procgame set's game did not start, once the machine runs (PinmameIsRunning() == 1): an empty string when
+// it started, else the reason ("the game process exited before the game was ready: ImportError: ..."). A machine
+// whose game did not start runs with nothing behind it, so a host should check this and stop it.
+// PINMAME_STATUS_EMULATOR_NOT_RUNNING before then, PINMAME_STATUS_GAME_NOT_FOUND in a build without P-ROC games
+PINMAMEAPI PINMAME_STATUS PinmameGetProcGameError(char* const p_buffer, const int size);
