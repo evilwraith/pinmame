@@ -4182,3 +4182,23 @@ PINMAMEAPI PINMAME_STATUS PinmameSetGameDef(const uint8_t* game, size_t gameSize
 	}
 	return PINMAME_STATUS_OK;
 }
+
+#if HAS_PROCGAME
+#include "../procgame/procgame_public.h"
+#endif
+
+PINMAMEAPI PINMAME_STATUS PinmameSetProcGameDir(const char* const p_dir)
+{
+#if HAS_PROCGAME
+	// read by the procgame driver's machine init, on the game thread
+	if (_isRunning) {
+		libpinmame_log_error("PinmameSetProcGameDir(): cannot change the P-ROC game while a game is running");
+		return PINMAME_STATUS_GAME_ALREADY_RUNNING;
+	}
+	procgame_set_game_dir(p_dir);
+	return PINMAME_STATUS_OK;
+#else
+	(void)p_dir;
+	return PINMAME_STATUS_GAME_NOT_FOUND;
+#endif
+}

@@ -611,3 +611,8 @@ PINMAMEAPI void PinmameSetMemMap(uint8_t* platform, size_t platformSize, uint8_t
 // The data is copied. It applies to every following PinmameRun() until replaced, so set it (or clear it with NULL/0) before each
 // game is started; it can't be changed while a game is running (PINMAME_STATUS_GAME_ALREADY_RUNNING)
 PINMAMEAPI PINMAME_STATUS PinmameSetGameDef(const uint8_t* game, size_t gameSize);
+
+// Name the P-ROC game (pyprocgame, SkeletonGame) the "procgame" set runs: the directory that holds its config.yaml or
+// config/machine.yaml. It applies to every following PinmameRun() of that set until replaced; set it before the game is
+// started (PINMAME_STATUS_GAME_ALREADY_RUNNING otherwise). PINMAME_STATUS_GAME_NOT_FOUND in a build without P-ROC games
+PINMAMEAPI PINMAME_STATUS PinmameSetProcGameDir(const char* const p_dir);

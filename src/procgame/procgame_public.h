@@ -30,6 +30,11 @@ extern "C" {
 /* 1 if dir holds a game: a config.yaml, or a config/machine.yaml */
 int procgame_is_game_dir(const char *dir);
 
+/* The game the machine runs: the host names its directory before it starts the machine
+   (PinmameSetProcGameDir). Empty until then */
+void procgame_set_game_dir(const char *dir);
+const char *procgame_game_dir(void);
+
 /* Starts the game in game_dir and waits until its setup has run, for at most timeout_ms (0: the
    default, 30 s). The game process loads a 40k-line Python program, so this is seconds. 0 on
    failure, with the reason in error */

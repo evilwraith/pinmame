@@ -9,9 +9,9 @@
   with a fake board that reads and writes a block of shared memory; this driver makes that a
   PinMAME machine, so a table drives it as it drives any other through the controller.
 
-  The game is a directory, pinmame/proc/<set>/, beside roms/. The set's one ROM is a short
-  manifest (backport tool procgame_manifest.py writes it), which gives the machine an identity and
-  refuses a tree ported for another version of the shared block.
+  One set, procgame, runs any of them. It has no ROM: the game is a directory, which the host
+  names before it starts the machine (PinmameSetProcGameDir) - VPX's VPROC.Controller takes it
+  from the table, pinmame/proc/<GameName>/.
 
   Numbers are VPinMAME's for a WPC machine, which the game process already speaks (it was made to
   look like VPinMAME to the tables):
@@ -31,7 +31,10 @@
   The display is the game's, as video: a SkeletonGame game draws full colour at the size its
   config asks for (Gremlins 271x148), a pyprocgame game 128x32 dots of colour index and
   brightness, expanded through its palette. On the real machines these were screens in the DMD's
-  place, so the layout says so (CORE_VIDEO_DMD) and a host shows them where it shows a DMD.
+  place, so the layout says so (CORE_VIDEO_DMD) and a host shows them where it shows a DMD. The
+  layout takes the game's size once the game has started, in the machine init: the core reads it
+  for its screen before that, at the largest a game may have, and a host is told the displays
+  after it (libpinmame's OnDisplayAvailable, at the running state).
 ************************************************************************************************/
 
 #include "driver.h"
@@ -325,30 +328,23 @@ static struct CustomSound_interface procgame_sndInt = { procgame_sh_start, procg
 /  start and stop
 /-------------------------------------------------*/
 
-/* The game's directory: proc/<set> beside a ROM path's folder (pinmame/roms -> pinmame/proc/<set>) */
-static int procgame_find_game(char *dir, size_t size)
+static core_tLCDLayout procgameDisp[] = {
+  {0, 0, PROCGAME_MAX_HEIGHT, PROCGAME_MAX_WIDTH, CORE_VIDEO | CORE_VIDEO_DMD, (genf *)procgame_video, NULL}, {0}
+};
+
+/* The layout's members are const - the core's layouts are fixed tables - so the entry is written
+   whole; its index is the core's, given before the driver's init */
+static void procgame_size_display(unsigned width, unsigned height)
 {
-  const int paths = osd_get_path_count(FILETYPE_ROM);
-  int i;
-  for (i = 0; i < paths; i++) {
-    char roms[1024];
-    size_t len;
-    char *slash;
-    if (!osd_get_full_path(FILETYPE_ROM, i, "", roms, sizeof(roms)))
-      continue;
-    len = strlen(roms);
-    while (len > 1 && (roms[len - 1] == '/' || roms[len - 1] == '\\')) roms[--len] = 0;
-    slash = strrchr(roms, '/');
-    if (slash) *slash = 0; else strcpy(roms, ".");
-    if (snprintf(dir, size, "%s/proc/%s", roms, Machine->gamedrv->name) < (int)size && procgame_is_game_dir(dir))
-      return 1;
-  }
-  return 0;
+  const core_tLCDLayout sized = { 0, 0, (UINT16)height, (UINT16)width, CORE_VIDEO | CORE_VIDEO_DMD,
+                                  (genf *)procgame_video, NULL, procgameDisp[0].index };
+  memcpy(&procgameDisp[0], &sized, sizeof(sized));
 }
 
 static MACHINE_INIT(procgame)
 {
-  char dir[1100], error[256];
+  const char *const dir = procgame_game_dir();
+  char error[256];
   int m;
 
   memset(&locals, 0, sizeof(locals));
@@ -367,9 +363,9 @@ static MACHINE_INIT(procgame)
   for (m = 0; m < PROCGAME_MAXSW; m++) locals.swSeen[m] = procgame_swChanges[m];
   core_swChangedHook = procgame_swChanged;
 
-  if (!procgame_find_game(dir, sizeof(dir))) {
-    logerror("P-ROC game: no proc/%s folder beside the ROM folder\n", Machine->gamedrv->name);
-    usrintf_showmessage_secs(30, "P-ROC game: no proc/%s folder beside the ROM folder", Machine->gamedrv->name);
+  if (!procgame_is_game_dir(dir)) {
+    logerror("P-ROC game: '%s' holds no game (no config.yaml or config/machine.yaml)\n", dir);
+    usrintf_showmessage_secs(30, "P-ROC game: '%s' holds no game", dir);
     return;
   }
   /* The game sets itself up here - seconds - before the machine reports it runs, so a host waiting
@@ -380,14 +376,9 @@ static MACHINE_INIT(procgame)
     return;
   }
   procgame_display_size(&locals.width, &locals.height);
-  if (locals.width != (unsigned)core_gameData->lcdLayout->length || locals.height != (unsigned)core_gameData->lcdLayout->start) {
-    logerror("P-ROC game: the game's display is %ux%u, the set's %dx%d\n", locals.width, locals.height,
-             core_gameData->lcdLayout->length, core_gameData->lcdLayout->start);
-    usrintf_showmessage_secs(10, "P-ROC game: the game's display is %ux%u, the set's %dx%d", locals.width, locals.height,
-                             core_gameData->lcdLayout->length, core_gameData->lcdLayout->start);
-  }
   if (locals.width > PROCGAME_MAX_WIDTH) locals.width = PROCGAME_MAX_WIDTH;
   if (locals.height > PROCGAME_MAX_HEIGHT) locals.height = PROCGAME_MAX_HEIGHT;
+  procgame_size_display(locals.width, locals.height);
   locals.running = 1;
 }
 
@@ -396,6 +387,7 @@ static MACHINE_STOP(procgame)
   locals.running = 0;
   core_swChangedHook = NULL;
   procgame_stop(); /* the game saves its scores, audits and settings on the way out */
+  procgame_size_display(PROCGAME_MAX_WIDTH, PROCGAME_MAX_HEIGHT); /* as the core reads it for the next game */
 }
 
 MACHINE_DRIVER_START(procgame)
@@ -416,80 +408,21 @@ MACHINE_DRIVER_START(procgame)
 MACHINE_DRIVER_END
 
 /*-------------------------------------------------
-/  the games: one set each, its display's size, and the manifest procgame_manifest.py writes
+/  the set: no ROM file (one empty region, as the ROM loader wants one), the layout above
 /-------------------------------------------------*/
-#define PROCGAME_INPUT_PORTS(name) \
-  INPUT_PORTS_START(name) \
-    CORE_PORTS \
-    PORT_START /* 2: CORE_COREINPORT, unused: the table owns the cabinet's buttons */ \
-      COREPORT_BIT(0x0001, "Unused", KEYCODE_NONE) \
-  INPUT_PORTS_END
+INPUT_PORTS_START(procgame)
+  CORE_PORTS
+  PORT_START /* 2: CORE_COREINPORT, unused: the table owns the cabinet's buttons */
+    COREPORT_BIT(0x0001, "Unused", KEYCODE_NONE)
+INPUT_PORTS_END
 
-#define PROCGAME_INIT(name, width, height) \
-  PROCGAME_INPUT_PORTS(name) \
-  static core_tLCDLayout name##Disp[] = { {0, 0, height, width, CORE_VIDEO | CORE_VIDEO_DMD, (genf *)procgame_video, NULL}, {0} }; \
-  static core_tGameData name##GameData = { GEN_PROCGAME, name##Disp, \
-    { PROCGAME_FLIPPERS, 0, 0, PROCGAME_NCUSTSOLS, 0, 0, 0, 0, procgame_getSol } }; \
-  static void init_##name(void) { core_gameData = &name##GameData; }
+static core_tGameData procgameGameData = { GEN_PROCGAME, procgameDisp,
+  { PROCGAME_FLIPPERS, 0, 0, PROCGAME_NCUSTSOLS, 0, 0, 0, 0, procgame_getSol } };
+static void init_procgame(void) { core_gameData = &procgameGameData; }
 
-/*-------------------------------------------------------------------
-/ Cactus Canyon Continued (Eric Priepke, 2013) - pyprocgame, on a Cactus Canyon (WPC-95)
-/-------------------------------------------------------------------*/
-PROCGAME_INIT(ccc, 128, 32)
-ROM_START(ccc_proc)
+ROM_START(procgame)
   ROM_REGION(0x100, REGION_USER1, 0)
-    ROM_LOAD("manifest", 0x0000, 0x0056, CRC(3b826d5f) SHA1(7c573fcf1d6fa754aaa36b3e1e657ee07d6a24bd))
 ROM_END
-CORE_GAMEDEF(ccc, proc, "Cactus Canyon Continued (P-ROC)", 2013, "Eric Priepke", procgame, 0)
-
-/*-------------------------------------------------------------------
-/ Gremlins - Mega Madness (2018) - SkeletonGame, for Visual Pinball (WPC)
-/-------------------------------------------------------------------*/
-PROCGAME_INIT(gremlins, 271, 148)
-ROM_START(gremlins_proc)
-  ROM_REGION(0x100, REGION_USER1, 0)
-    ROM_LOAD("manifest", 0x0000, 0x0061, CRC(05aa5212) SHA1(6f2c945912aa3faf8fc1d9ba39c47362b6e47830))
-ROM_END
-CORE_GAMEDEF(gremlins, proc, "Gremlins - Mega Madness (P-ROC)", 2018, "Original", procgame, 0)
-
-/*-------------------------------------------------------------------
-/ Evil Dead (2018) - SkeletonGame, for Visual Pinball (WPC)
-/-------------------------------------------------------------------*/
-PROCGAME_INIT(evildead, 520, 290)
-ROM_START(evildead_proc)
-  ROM_REGION(0x100, REGION_USER1, 0)
-    ROM_LOAD("manifest", 0x0000, 0x0061, CRC(7ee52ccf) SHA1(79e53387b8fb445748bc0e4841e97da8fc1e8a7f))
-ROM_END
-CORE_GAMEDEF(evildead, proc, "Evil Dead (P-ROC)", 2018, "Original", procgame, 0)
-
-/*-------------------------------------------------------------------
-/ Jaws (2018) - SkeletonGame, for Visual Pinball (WPC)
-/-------------------------------------------------------------------*/
-PROCGAME_INIT(jaws, 590, 150)
-ROM_START(jaws_proc)
-  ROM_REGION(0x100, REGION_USER1, 0)
-    ROM_LOAD("manifest", 0x0000, 0x0059, CRC(c94c256f) SHA1(f395faeb5eaa2b02ee326c04ecb7d5307fb6835f))
-ROM_END
-CORE_GAMEDEF(jaws, proc, "Jaws (P-ROC)", 2018, "Original", procgame, 0)
-
-/*-------------------------------------------------------------------
-/ Knight Rider (2018) - SkeletonGame, for Visual Pinball (WPC)
-/-------------------------------------------------------------------*/
-PROCGAME_INIT(kr, 400, 250)
-ROM_START(kr_proc)
-  ROM_REGION(0x100, REGION_USER1, 0)
-    ROM_LOAD("manifest", 0x0000, 0x005e, CRC(98f03f88) SHA1(500d0e23224c289693eea66d76397caf15d6db16))
-ROM_END
-CORE_GAMEDEF(kr, proc, "Knight Rider (P-ROC)", 2018, "Original", procgame, 0)
-
-/*-------------------------------------------------------------------
-/ Total Sickness (2019) - SkeletonGame, for Visual Pinball (WPC-95)
-/-------------------------------------------------------------------*/
-PROCGAME_INIT(tsick, 320, 200)
-ROM_START(tsick_proc)
-  ROM_REGION(0x100, REGION_USER1, 0)
-    ROM_LOAD("manifest", 0x0000, 0x0063, CRC(19ce93b3) SHA1(48f0e33a7903d5051c729a17d0ed21aa2b18e6a6))
-ROM_END
-CORE_GAMEDEF(tsick, proc, "Total Sickness (P-ROC)", 2019, "Original", procgame, 0)
+CORE_GAMEDEFNV(procgame, "P-ROC game (pyprocgame, SkeletonGame)", 2013, "Various", procgame, 0)
 
 #endif /* HAS_PROCGAME */

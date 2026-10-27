@@ -18,6 +18,8 @@ static_assert(PROCGAME_MAX_WIDTH == PROC_HD_MAX_WIDTH && PROCGAME_MAX_HEIGHT == 
 namespace {
 
 std::unique_ptr<procgame::ProcBridge> bridge;
+// The game the host named for the next start
+std::string gameDir;
 // Set when the game process is seen gone, with why; procgame_running() keeps answering it
 std::string stopped;
 // The frame as the game drew it, before the palette (pyprocgame) or as RGB24 (SkeletonGame)
@@ -34,6 +36,16 @@ void copy_text(const std::string &text, char *dst, unsigned size)
 extern "C" int procgame_is_game_dir(const char *dir)
 {
    return dir && procgame::ProcBridge::IsGameDir(dir) ? 1 : 0;
+}
+
+extern "C" void procgame_set_game_dir(const char *dir)
+{
+   gameDir = dir ? dir : "";
+}
+
+extern "C" const char *procgame_game_dir(void)
+{
+   return gameDir.c_str();
 }
 
 extern "C" int procgame_start(const char *game_dir, unsigned timeout_ms, char *error, unsigned error_size)
