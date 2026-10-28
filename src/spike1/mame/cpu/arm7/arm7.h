@@ -204,7 +204,7 @@ protected:
 
 	int64_t saturate_qbit_overflow(int64_t res);
 	void SwitchMode(uint32_t cpsr_mode_val);
-	uint32_t decodeShift(uint32_t insn, uint32_t *pCarry);
+	ATTR_FORCE_INLINE uint32_t decodeShift(uint32_t insn, uint32_t *pCarry); // PINMAME
 	int loadInc(uint32_t pat, uint32_t rbv, uint32_t s, int mode);
 	int loadDec(uint32_t pat, uint32_t rbv, uint32_t s, int mode);
 	int storeInc(uint32_t pat, uint32_t rbv, int mode);
@@ -222,6 +222,7 @@ protected:
 	void HandleSMulLong(uint32_t insn);
 	void HandleUMulLong(uint32_t insn);
 	void HandleMemBlock(uint32_t insn);
+	void HandleLDMPC(uint32_t insn); // PINMAME
 
 	void arm7ops_0123(uint32_t insn);
 	void arm7ops_4567(uint32_t insn);
