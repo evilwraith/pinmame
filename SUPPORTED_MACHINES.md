@@ -31,25 +31,25 @@ onwards** is listed separately below as not expected rather than as missing.
 
 | Status                           | Machines | Share |
 | -------------------------------- | -------: | ----: |
-| Fully working                    |      582 | 70.0% |
+| Fully working                    |      583 | 69.9% |
 | Partially working                |       31 |  3.7% |
-| Emulated but not working         |        1 |  0.1% |
-| Not emulated                     |      142 | 17.1% |
-| Not emulated — released recently |       76 |  9.1% |
-| **Total**                        |  **832** |       |
+| Emulated but not working         |        0 |  0.0% |
+| Not emulated                     |      142 | 17.0% |
+| Not emulated — released recently |       78 |  9.4% |
+| **Total**                        |  **834** |       |
 
 ### By decade
 
 | Decade | Total | Fully working | Partial | Not working | Not emulated |
 | ------ | ----: | ------------: | ------: | ----------: | -----------: |
 | 1970s  |   170 |           111 |       5 |           0 |           54 |
-| 1980s  |   328 |           280 |      23 |           1 |           24 |
+| 1980s  |   328 |           281 |      23 |           0 |           24 |
 | 1990s  |   148 |           142 |       3 |           0 |            3 |
 | 2000s  |    25 |            24 |       0 |           0 |            1 |
 | 2010s  |    73 |            24 |       0 |           0 |           49 |
-| 2020s  |    88 |             1 |       0 |           0 |           87 |
+| 2020s  |    90 |             1 |       0 |           0 |           89 |
 
-## Fully working (582)
+## Fully working (583)
 
 Every known ROM set runs, and the driver flags nothing wrong with any of them.
 
@@ -263,6 +263,7 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | Thunderball                                    | 1982 | Williams               | Alphanumeric | `thund_p1`, `thund_p2`, `thund_p3`                   |             |       |
 | Varkon                                         | 1982 | Williams               | Alphanumeric | `vrkon_l1`                                           |             |       |
 | Warlok                                         | 1982 | Williams               | Alphanumeric | `wrlok_l3`                                           |             |       |
+| 4X4                                            | 1983 | Atari                  | Alphanumeric | `fourx4`                                             | preliminary |       |
 | Amazon Hunt                                    | 1983 | Gottlieb               | Alphanumeric | `amazonh`, `amazonha`, `amazn2fp` + 1 more           |             |       |
 | Farfalla                                       | 1983 | Zaccaria               | Alphanumeric | `farfalla`, `farfallaa`, `farfallf` + 9 more         |             |       |
 | Firepower II                                   | 1983 | Williams               | Alphanumeric | `fpwr2_l2`                                           |             |       |
@@ -630,8 +631,8 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | The Walking Dead                               | 2014 | Stern                  | DMD          | `twd_105`, `twd_111`, `twd_111h` + 20 more           |             |       |
 | Game of Thrones                                | 2015 | Stern                  | DMD          | `got_137`, `got_137h`                                |             |       |
 | KISS                                           | 2015 | Stern                  | DMD          | `kiss15_141`, `kiss15_141h`                          |             |       |
-| Whoa Nellie / PBR                              | 2015 | Stern                  | Reels        | `wnbjm_155`, `pabst_101`, `primus_103`               |             |       |
-| WrestleMania                                   | 2015 | Stern                  | DMD          | `wwe_135h`                                           |             |       |
+| Whoa Nellie / PBR                              | 2015 | Stern                  | Reels        | `wnbjm_155`, `pabst_101`, `pabst_102` + 2 more       |             |       |
+| WrestleMania                                   | 2015 | Stern                  | DMD          | `wwe_135`, `wwe_135h`                                |             |       |
 | Domino's Spectacular Pinball Adventure         | 2016 | Spooky Pinball         | DMD          | `dominos_005`, `dominos_006`                         | yes         |       |
 | Ghostbusters                                   | 2016 | Stern                  | DMD          | `gbust_117`, `gbust_117h`                            |             |       |
 | Rob Zombie's Spookshow International           | 2016 | Spooky Pinball         | DMD          | `rzspook_019`, `rzspook_026`                         | yes         |       |
@@ -679,14 +680,12 @@ regional variant or a prototype is at fault while the production ROMs are fine.
 | Congo                     | 1995 | Williams     | DMD          | `congo_11`, `congo_13`, `congo_20` + 2 more   | preliminary | imperfect sound in `congo_20s10k`; 4 other revisions clean        |
 | Revenge From Mars         | 1999 | Bally        | CGA          | `rfm_010`, `rfm_070`, `rfm_071` + 33 more     |             | does not run in `rfm_121`; 35 other revisions clean               |
 
-## Emulated but not working (1)
+## Emulated but not working (0)
 
 A driver exists and the ROMs are known, but every ROM set is marked `GAME_NOT_WORKING`: it
 does not boot or does not play.
 
-| Machine | Year | Manufacturer | Display      | PinMAME ROM sets | Simulator | Notes        |
-| ------- | ---: | ------------ | ------------ | ---------------- | --------- | ------------ |
-| 4X4     | 1983 | Atari        | Alphanumeric | `fourx4`         |           | does not run |
+_None._
 
 ## Not emulated (142)
 
@@ -838,7 +837,7 @@ future work.
 | Shoot 'n Scoot                              | 2020 | Multimorphic              | LCD          |
 | Teenage Mutant Ninja Turtles                | 2020 | Stern                     | LCD          |
 
-## Not emulated — released recently (76)
+## Not emulated — released recently (78)
 
 No driver, and not expected to get one soon: see the note on end-of-life machines above.
 
@@ -914,6 +913,8 @@ No driver, and not expected to get one soon: see the note on end-of-life machine
 | Dungeon Crawler Carl                              | 2026 | Multimorphic             | LCD          |
 | Ender's Game                                      | 2026 | Multimorphic             | LCD          |
 | Fallout                                           | 2026 | Stern                    | LCD          |
+| Lost in Space                                     | 2026 | Vector Pinball           | Alphanumeric |
+| Ned Kelly                                         | 2026 | Vector Pinball           | Alphanumeric |
 | Pokémon                                           | 2026 | Stern                    | LCD          |
 | Sonic the Hedgehog                                | 2026 | Jersey Jack Pinball      | LCD          |
 | Teenage Mutant Ninja Turtles: Battle in the Sewer | 2026 | Wonderland Amusements    | LCD          |
@@ -1149,8 +1150,8 @@ scripts/gen_supported_machines.py
 
 The script reads a cached copy of OPDB and re-downloads only with `--refresh`; `--check`
 fails if this file is out of date. Machine data comes from the OPDB snapshot of
-**2026-11-02**; driver data from `src/wpc` at the commit this file was generated from, on
-**2026-11-02**.
+**2026-11-04**; driver data from `src/wpc` at the commit this file was generated from, on
+**2026-11-04**.
 
 A machine is one OPDB *group*, so a title and its remakes are one row, dated and credited
 to the original. Its status is that of the *worst* of its ROM sets, so "fully working"
