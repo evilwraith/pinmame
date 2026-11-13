@@ -2323,7 +2323,7 @@ static INTERRUPT_GEN(sam_irq)
 // neither 0 nor F, i.e. where the formula below (bit mask) and a blend would disagree. PuP packs captured
 // on older builds show those pixels at other levels (Shrek shr_141 "END OF BALL BONUS"); the dump is the
 // evidence to settle what the hardware does. Off unless the variable is set.
-static void sam_dmd_dump(const UINT8* frame, const UINT8* ram1, const UINT8* ram2, int mixedCount)
+static void sam_dmd_dump(const UINT8* frame, const UINT8* ram1, const UINT8* ram2, int mixedCount, const UINT8* page1, const UINT8* page2)
 {
 	static FILE* f = NULL;
 	static int probed = 0;
@@ -2350,12 +2350,28 @@ static void sam_dmd_dump(const UINT8* frame, const UINT8* ram1, const UINT8* ram
 	}
 	for (int i = 0; i < mixedCount; i++)
 		fprintf(f, "M %d %d %02x %02x\n", ram1[i * 4 + 0], ram1[i * 4 + 1], ram1[i * 4 + 2], ram2[i]);
+	// Both pages as the ROM wrote them, full bytes ("P1"/"P2" rows): the pack captures suggest the
+	// display's value is not just the selected page's low nibble.
+	for (int pg = 0; pg < 2; pg++) {
+		const UINT8* page = pg ? page2 : page1;
+		fprintf(f, "P%d\n", pg + 1);
+		for (int ii = 0; ii < 32; ii++) {
+			char line[258];
+			for (int jj = 0; jj < 128; jj++) {
+				line[jj * 2] = "0123456789abcdef"[page[ii * 128 + jj] >> 4];
+				line[jj * 2 + 1] = "0123456789abcdef"[page[ii * 128 + jj] & 15];
+			}
+			line[256] = '\n'; line[257] = 0;
+			fputs(line, f);
+		}
+	}
 	fflush(f);
 }
 
 static void sam_dmd(int data) {
 	static UINT8 mixedPix[128 * 32 * 4]; // x, y, RAM1, (unused) per mixed pixel
 	static UINT8 mixedRam2[128 * 32];
+	static UINT8 page1Copy[128 * 32], page2Copy[128 * 32];
 	int mixedCount = 0;
 	for(int ii = 0; ii < 32; ii++ )
 	{
@@ -2366,6 +2382,8 @@ static void sam_dmd(int data) {
 		{
 			const UINT8 RAM1 = offs1[jj];
 			const UINT8 RAM2 = offs2[jj];
+			page1Copy[ii * 128 + jj] = RAM1;
+			page2Copy[ii * 128 + jj] = RAM2;
 			const UINT8 mix = RAM1 >> 4;
 			const UINT8 temp = (RAM2 & mix) | (RAM1 & (mix^0xF)); //!! is this correct or is mix rather a multiplier/ratio/alphavalue??
 			if ((mix != 0xF) && (mix != 0x0)) { //!! happens e.g. in POTC in extra ball explosion animation: RAM1 values triggering this: 223, 190, 175, 31, 25, 19, 17 with RAM2 being always 0. But is this just wrong game data (as its a converted animation)?!
@@ -2377,7 +2395,7 @@ static void sam_dmd(int data) {
 			*dotRaw++ = temp;
 		}
 	}
-   sam_dmd_dump(samlocals.rawDMD, mixedPix, mixedRam2, mixedCount);
+   sam_dmd_dump(samlocals.rawDMD, mixedPix, mixedRam2, mixedCount, page1Copy, page2Copy);
    core_dmd_submit_frame(core_gameData->lcdLayout->importedLayout ? core_gameData->lcdLayout->importedLayout : core_gameData->lcdLayout, samlocals.rawDMD, 1);
 }
 
