@@ -2317,7 +2317,46 @@ static INTERRUPT_GEN(sam_irq)
   of at least the last 24 frames. As this leads to very little inter PWM frame
   interaction, we simply apply a LUT corresponding to the 1 / 2 / 4 / 5 pattern.
 --*/
+// Research dump of the SAM DMD page mixing (4kp fork, 2026-11-13): with PINMAME_SAM_DMD_DUMP=<dir> in the
+// environment, every distinct 62.67 Hz frame goes to <dir>/samdmd.txt as "F <time>", 32 rows of 128 hex
+// nibbles (the value handed to the display), then one "M x y RAM1 RAM2" line per pixel whose mix nibble is
+// neither 0 nor F, i.e. where the formula below (bit mask) and a blend would disagree. PuP packs captured
+// on older builds show those pixels at other levels (Shrek shr_141 "END OF BALL BONUS"); the dump is the
+// evidence to settle what the hardware does. Off unless the variable is set.
+static void sam_dmd_dump(const UINT8* frame, const UINT8* ram1, const UINT8* ram2, int mixedCount)
+{
+	static FILE* f = NULL;
+	static int probed = 0;
+	static UINT8 last[128 * 32];
+	if (!probed) {
+		const char* dir = getenv("PINMAME_SAM_DMD_DUMP");
+		probed = 1;
+		if (dir && dir[0]) {
+			char path[1024];
+			snprintf(path, sizeof(path), "%s/samdmd.txt", dir);
+			f = fopen(path, "a");
+			memset(last, 0xFF, sizeof(last));
+		}
+	}
+	if (!f) return;
+	if (memcmp(last, frame, sizeof(last)) == 0) return;
+	memcpy(last, frame, sizeof(last));
+	fprintf(f, "F %.5f\n", timer_get_time());
+	for (int ii = 0; ii < 32; ii++) {
+		char line[130];
+		for (int jj = 0; jj < 128; jj++) line[jj] = "0123456789abcdef"[frame[ii * 128 + jj] & 15];
+		line[128] = '\n'; line[129] = 0;
+		fputs(line, f);
+	}
+	for (int i = 0; i < mixedCount; i++)
+		fprintf(f, "M %d %d %02x %02x\n", ram1[i * 4 + 0], ram1[i * 4 + 1], ram1[i * 4 + 2], ram2[i]);
+	fflush(f);
+}
+
 static void sam_dmd(int data) {
+	static UINT8 mixedPix[128 * 32 * 4]; // x, y, RAM1, (unused) per mixed pixel
+	static UINT8 mixedRam2[128 * 32];
+	int mixedCount = 0;
 	for(int ii = 0; ii < 32; ii++ )
 	{
 		UINT8 *dotRaw = &samlocals.rawDMD[ii * 128];
@@ -2329,11 +2368,16 @@ static void sam_dmd(int data) {
 			const UINT8 RAM2 = offs2[jj];
 			const UINT8 mix = RAM1 >> 4;
 			const UINT8 temp = (RAM2 & mix) | (RAM1 & (mix^0xF)); //!! is this correct or is mix rather a multiplier/ratio/alphavalue??
-			if ((mix != 0xF) && (mix != 0x0)) //!! happens e.g. in POTC in extra ball explosion animation: RAM1 values triggering this: 223, 190, 175, 31, 25, 19, 17 with RAM2 being always 0. But is this just wrong game data (as its a converted animation)?!
+			if ((mix != 0xF) && (mix != 0x0)) { //!! happens e.g. in POTC in extra ball explosion animation: RAM1 values triggering this: 223, 190, 175, 31, 25, 19, 17 with RAM2 being always 0. But is this just wrong game data (as its a converted animation)?!
 				LOG(("Special DMD Bitmask %01X RAM1=%02x RAM2=%02x pix@(%3dx%2d)", mix, RAM1, RAM2, jj, ii));
+				mixedPix[mixedCount * 4 + 0] = (UINT8)jj; mixedPix[mixedCount * 4 + 1] = (UINT8)ii; mixedPix[mixedCount * 4 + 2] = RAM1;
+				mixedRam2[mixedCount] = RAM2;
+				mixedCount++;
+			}
 			*dotRaw++ = temp;
 		}
 	}
+   sam_dmd_dump(samlocals.rawDMD, mixedPix, mixedRam2, mixedCount);
    core_dmd_submit_frame(core_gameData->lcdLayout->importedLayout ? core_gameData->lcdLayout->importedLayout : core_gameData->lcdLayout, samlocals.rawDMD, 1);
 }
 
