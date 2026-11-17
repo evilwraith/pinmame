@@ -963,6 +963,7 @@ DRIVERNV(snspare1)      //                Strikes N' Spares (rev.1)
 DRIVERNV(snspare2)      //                Strikes N' Spares (rev.2)
 DRIVERNV(waterwld)      //S3-746:   10/95 Waterworld (rev.3)
 DRIVERNV(waterwl5)      //                Waterworld (rev.5)
+DRIVERNV(waterwl5f)     //          11/26 Waterworld (rev.5-FIX MOD)
 DRIVERNV(waterwl2)      //                Waterworld (rev.2)
 DRIVERNV(andretti)      //S3-747:   12/95 Mario Andretti
 DRIVERNV(andrett4)      //                Mario Andretti (rev.T4)
@@ -2840,6 +2841,7 @@ DRIVER(shfin,l1)        //S11-922:  ??/87 W Shuffle Inn (Shuffle)
 DRIVER(cycln,l1)        //S11-564:  02/88 W Cyclone (L-1)
 DRIVER(cycln,l4)        //          02/88 W Cyclone (L-4)
 DRIVER(cycln,l5)        //          02/88 W Cyclone (L-5)
+DRIVER(cycln,l5c)       //          11/26   Cyclone (L-5C Competition MOD)
 DRIVER(bnzai,pa)        //S11-566:  05/88 W Banzai Run (P-A)
 DRIVER(bnzai,l1)        //          05/88 W Banzai Run (L-1)
 DRIVER(bnzai,l3)        //          05/88 W Banzai Run (L-3)
@@ -2877,6 +2879,8 @@ DRIVER(bk2k,l4)         //          04/89 W Black Knight 2000 (L-4)
 DRIVER(bk2k,la2)        //          04/89 W Black Knight 2000 (LA-2)
 DRIVER(bk2k,pa7)        //          04/89 W Black Knight 2000 (PA-7 Prototype)
 DRIVER(bk2k,pa5)        //          04/89 W Black Knight 2000 (PA-5 Prototype)
+DRIVER(bk2k,l4c)        //          11/26   Black Knight 2000 (L-4C Competition MOD Fixed 1M jackpot)
+DRIVER(bk2k,l4c2)       //          11/26   Black Knight 2000 (L-4C Competition MOD Per-player jackpot)
                         //S11:      05/89 W Pool
 //First Game produced entirely by Williams after Merger to use Bally Name
 DRIVER(tsptr,l3)        //S11-2630: 07/89 B Transporter the Rescue (L-3)
@@ -3249,7 +3253,8 @@ DRIVER(dm,dh5b)         //                  Demolition Man (DH-5) with rude spee
 DRIVER(dm,h6)           //          08/95 W Demolition Man (H-6) with rude speech
 DRIVER(dm,h6b)          //                  Demolition Man (H-6) with rude speech (Coin Play)
 DRIVER(dm,h6c)          //          11/19   Demolition Man (H-6C Competition MOD) with rude speech
-//DRIVER(dm,h7)           //          03/22   Demolition Man (7.0 Competition MOD) with rude speech //commercial release
+//DRIVER(dm,70h)          //          03/22   Demolition Man (7.0 Competition MOD) with rude speech //commercial release
+//DRIVER(dm,70)           //          03/22   Demolition Man (7.0 Competition MOD) //commercial release
 DRIVER(dm,dt099)        //          04/14   Demolition Man (FreeWPC/Demolition Time 0.99)
 DRIVER(dm,dt101)        //          09/14   Demolition Man (FreeWPC/Demolition Time 1.01)
 DRIVER(tafg,h3)         //WPC-538:  ??/94 B Addams Family Special Collectors Edition / Gold, The (Home version)
@@ -3459,13 +3464,15 @@ DRIVER(cp,16)           //          07/98 B Champion Pub, The (1.6)
 DRIVER(cp,16pfx)        //          03/19 B Champion Pub, The (1.6 Pinball FX)
 DRIVER(mb,05)           //WPC-565:  07/98 W Monster Bash (0.5 Prototype)
 DRIVER(mb,10)           //          07/98 W Monster Bash (1.0)
-DRIVER(mb,106)          //                               (1.06 Home version)
-DRIVER(mb,106b)         //                               (1.06b Coin Play)
+DRIVER(mb,106)          //          ??/?? W Monster Bash (1.06 Home version)
+DRIVER(mb,106b)         //          ??/?? W Monster Bash (1.06b Coin Play)
 DRIVER(cc,10)           //WPC-566:  10/98 B Cactus Canyon (1.0)
 DRIVER(cc,12)           //          02/99 B Cactus Canyon (1.2)
 DRIVER(cc,13)           //          04/99 B Cactus Canyon (1.3)
 DRIVER(cc,13k)          //                  Cactus Canyon (1.3) with real knocker
 DRIVER(cc,104)          //          11/06 B Cactus Canyon (1.04 test 0.2 (The Pinball Factory) version)
+// apparently there was a WPC 'conversion' of Capcoms BBB in the making with code fully working, but maybe all art/sound still missing
+// might have been killed off though completely during the P2K efforts
 //Test Fixtures
 DRIVER(tfa,13)          //WPC-584T: 09/91   Test fixture Alphanumeric
 DRIVER(tfdmd,l3)        //WPC-584T: 09/91   Test fixture DMD

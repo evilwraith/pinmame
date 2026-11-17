@@ -24,7 +24,7 @@ static void ZAC_soundInit(void) {
   if (core_gameData->hw.soundBoard == SNDBRD_TECHNO)
   {
     sndbrd_0_init(core_gameData->hw.soundBoard, ZACSND_CPUA, memory_region(ZACSND_CPUCREGION), NULL, NULL);
-    sndbrd_logData(0, 0); // data_port_w logs the Tecnoplay sound commands, see there
+    sndbrd_logData(0, SNDBRD_DATALOG_LEGACY); // data_port_w logs the Tecnoplay sound commands, see there; old AltSound packs use the data writes
   }
   else
     sndbrd_0_init(core_gameData->hw.soundBoard, ZACSND_CPUA, memory_region(ZACSND_CPUAREGION), NULL, NULL);
@@ -341,7 +341,7 @@ static WRITE_HANDLER(data_port_w)
     // byte (it is the one that interrupts the TMS7000); a repeat of a command is a new pair. 3F BF is the
     // idle pair the game sends between commands.
     const double now = timer_get_time();
-    const int second = locals.sndPair && now - locals.sndTime < 0.0025 && !((data ^ locals.sndData) & 0x1F);
+    const int second = locals.sndPair && now - locals.sndTime < 0.0025 && !((data ^ locals.sndData) & 0x1F); //!! magic timing
     locals.sndTime = now;
     locals.sndData = data;
     locals.sndPair = !second;

@@ -126,19 +126,27 @@ Rebalanced sound levels:
  and the Data East YM2151/MSM5205 board (Laser War to TMNT: music a bit louder vs. the speech/samples)
 Wired up sample rate selection for Verne's World and Jolly Park (potentially fixes some samples played)
 Fixed sound problems if a OKI6295 game is used after a OKI6376 game (e.g. GTS3 after Sleic)
-Added manual sound commands (sound commander) for the Bally Cheap Squeak and Turbo Cheap Squeak sound boards
-Fixed the sound command logging and altsound handling for Bally MPU-17/MPU-35 machines: it now filters only the commands the game sends to the -32/-50, -51, -56, Squawk & Talk and Cheap Squeak boards, and to Nuova Bell's -51N, -61N and own sound boards
-Fixed the sound command logging and altsound handling for Whirlwind: the bytes that drive the solenoid overlay board are no longer also logged as sound commands
-Fixed the sound command logging and altsound handling for the Bally 6803 machines: one byte per command (the one the sound strobe goes out with), not every write of port 1
-Fixed the sound command logging and altsound handling for the Bally video machines
-Fixed the sound command logging and altsound handling for Game Plan MSU-3 machines
-Fixed the sound command logging and altsound handling for Hankin machines
-Fixed the sound command logging and altsound handling for Playmatic Sound-3 (Cerberus)
-Fixed the sound command logging and altsound handling for Playmatic Zira
-Fixed the sound command logging and altsound handling for Spinball / Inder machines
-Fixed the sound command logging and altsound handling for Tecnoplay Scramble
-Fixed the sound command logging and altsound handling for Zaccaria 1311 machines
-Added sound command logging for Stern SB-300, Atari Gen1/2, Early Inder & Romstar's Goofy Hoops
+Added manual sound commands (sound commander) for the Bally Cheap Squeak and Turbo Cheap Squeak and Nuova Bell -51N sound boards
+Sound commander's commands are now also passed to libPinMAME's sound command callback
+Added or fixed the sound command logging and altsound handling for the following machines/generations:
+ Atari Gen1/2
+ Bally MPU-17/MPU-35: it now filters only the commands the game sends to the -32/-50, -51, -56, Squawk & Talk and Cheap Squeak boards, and to Nuova Bell's -51N, -61N and own sound boards
+ Bally 6803: one byte per command (the one the sound strobe goes out with), not every write of port 1
+ Bally Video Pins
+ Capcom
+ Game Plan MSU-3
+ Hankin
+ Early Inder
+ Mr. Game
+ Pinball 2000
+ Playmatic Sound-3 (Cerberus)
+ Playmatic Zira
+ Romstar's Goofy Hoops
+ Spinball / Inder
+ Stern SB-300
+ Tecnoplay Scramble
+ Whirlwind: the bytes that drive the solenoid overlay board are no longer also logged as sound commands
+ Zaccaria 1311
 Slightly improved Williams System 3-7, 9/11 and WPC89 sound boards output (some loud sounds did clip (e.g. Addams Family))
 Improved BSMT2000 sound emulation speed a bit
 Fixed the BSMT2000 logo attract mode jingle on Data East/Sega/Stern games
@@ -173,7 +181,7 @@ Fixed missing score digits for Inder
 Fixed F-14 solenoid 10 declared as a GI relay
 Fixed the RollerCoaster Tycoon 7.02, Spanish set not working
 
-*** ROM SUPPORT *** Thanks to Tom Collins/Scorbit, Paul Swan, Dieter Werner, Victor Fernandez, Jordi Beltran, ipdb.org, Billc479, Scott Charles, inkochnito, frisbez, Chad Hendrickson, idealjoker, ingo333, RedBall, Quench, slochar, Jesus Carballo, Rockman i uri666arcade de l'associació ARCADE (Recreativas.org), myPinballs, hemtoni
+*** ROM SUPPORT *** Thanks to Tom Collins/Scorbit, Paul Swan, Dieter Werner, Victor Fernandez, Jordi Beltran, ipdb.org, Billc479, Scott Charles, inkochnito, frisbez, Chad Hendrickson, idealjoker, ingo333, RedBall, Quench, slochar, Jesus Carballo, Rockman i uri666arcade de l'associació ARCADE (Recreativas.org), myPinballs, hemtoni, Joseph Blasi
 New:
 Elbos: Genesis
 IDSA: Fantastic Car
@@ -249,8 +257,11 @@ Atlantis (rev. 3 Tournament MOD v3931)
 Bad Cats LF-1 (French)
 Bad Cats (The Cat's Meow) (MOD 1.2 & 1.3)
 Bike Race (V4.1) (V4.1, press start MOD, free play) (V4.1, press start MOD, free play, English)
+Black Knight 2000 (L-4C Competition MOD Fixed 1M jackpot)
+Black Knight 2000 (L-4C Competition MOD Per-player jackpot)
 Corvette LA-2
 Cue Ball Wizard (Spanish / Vifico license)
+Cyclone (L-5C Competition MOD)
 Diner LA-4 (Fixed Right Ramp MOD)
 Dragonfist (MOD 17)
 Funhouse 9.07H (Ballsaver MOD), 9.05H + (Ballsaver MOD) (both are independently done versions)
@@ -275,6 +286,7 @@ Swords of Fury (Richrom/Lionman MOD V1, with and without swords sounds)
 Terminator 2: Judgment Day (L-2, P-1 Sound)
 Transporter the Rescue L-3 (Fixed Jackpot MOD), LX-4 (Competition MOD in 2 variants: 'adult' and clean (one replaced word))
 Victory (tournament/competition MOD 1.1 & 1.2 & 1.3)
+Waterworld (rev.5-FIX MOD)
 World Cup Soccer LA-1
 
 

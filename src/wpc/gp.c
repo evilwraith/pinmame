@@ -54,7 +54,7 @@ static struct {
   UINT8 val;
   int sndCmdMode;		//The sound board takes a command as a nibble sequence (MSU-3)
   int sndCmdByte;		//Command byte assembled from the nibbles written so far
-  int sndCmdNibbles;		//Number of nibbles shifted in since the lines were idle
+  int sndCmdNibbles;	//Number of nibbles shifted in since the lines were idle
   int sndCmdLast;		//Last nibble written to the sound lines
 } locals;
 
@@ -471,7 +471,7 @@ static void GP_common_init(void) {
   if (core_gameData->hw.soundBoard == SNDBRD_GPMSU3) {
     locals.sndCmdMode = 1;
     locals.sndCmdLast = 0x0f;
-    sndbrd_logData(0, 0); // GP_logMSU3Cmd logs the sound commands
+    sndbrd_logData(0, SNDBRD_DATALOG_LEGACY); // GP_logMSU3Cmd logs the sound commands; old AltSound packs use the data writes
   }
 
   /* init PPI */

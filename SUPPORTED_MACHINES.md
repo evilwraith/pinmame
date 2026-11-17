@@ -412,7 +412,7 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | Banzai Run                                     | 1988 | Williams               | Alphanumeric | `bnzai_g3`, `bnzai_l1`, `bnzai_l3` + 2 more          |             |       |
 | Blackwater 100                                 | 1988 | Bally                  | Alphanumeric | `black100`, `black10s`                               |             |       |
 | Clown                                          | 1988 | Inder                  | DMD          | `pinclofp`, `pinclown`                               |             |       |
-| Cyclone                                        | 1988 | Williams               | Alphanumeric | `cycln_l1`, `cycln_l4`, `cycln_l5`                   |             |       |
+| Cyclone                                        | 1988 | Williams               | Alphanumeric | `cycln_l1`, `cycln_l4`, `cycln_l5` + 1 more          |             |       |
 | Dakar                                          | 1988 | Mr Game                | CGA          | `dakar`                                              |             |       |
 | Diamond Lady                                   | 1988 | Gottlieb               | Alphanumeric | `diamnffp`, `diamngfp`, `diamond` + 3 more           |             |       |
 | Escape from the Lost World                     | 1988 | Bally                  | Alphanumeric | `esclwrld`, `esclwrlg`                               |             |       |
@@ -431,7 +431,7 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | Atlantis                                       | 1989 | Bally                  | Alphanumeric | `atlantis`, `atlantist`, `atla_ltd`                  |             |       |
 | Bad Cats                                       | 1989 | Williams               | Alphanumeric | `bcats_f1`, `bcats_g4`, `bcats_l2` + 4 more          |             |       |
 | Big House                                      | 1989 | Gottlieb               | Alphanumeric | `bighosfp`, `bighouse`, `bighousf` + 3 more          |             |       |
-| Black Knight 2000                              | 1989 | Williams               | Alphanumeric | `bk2k_l4`, `bk2k_la2`, `bk2k_lg1` + 5 more           |             |       |
+| Black Knight 2000                              | 1989 | Williams               | Alphanumeric | `bk2k_l4`, `bk2k_la2`, `bk2k_lg1` + 7 more           |             |       |
 | Bone Busters Inc.                              | 1989 | Gottlieb               | Alphanumeric | `bonebffp`, `bonebgfp`, `bonebsfp` + 7 more          |             |       |
 | Caribbean Cruise                               | 1989 | International          | Alphanumeric | `ccruise`                                            |             |       |
 | Corsario                                       | 1989 | Inder                  | Alphanumeric | `corsarfp`, `corsario`                               |             |       |
@@ -554,7 +554,7 @@ Every known ROM set runs, and the driver flags nothing wrong with any of them.
 | Shaq Attaq                                     | 1995 | Gottlieb               | DMD          | `shaqatt2`, `shaqattq`                               |             |       |
 | Stargate                                       | 1995 | Gottlieb               | DMD          | `stargat1`, `stargat2`, `stargat3` + 3 more          |             |       |
 | Theatre of Magic                               | 1995 | Bally                  | DMD          | `tom_06`, `tom_061`, `tom_101f` + 9 more             | full        |       |
-| Waterworld                                     | 1995 | Gottlieb               | DMD          | `waterwl2`, `waterwl5`, `waterwld`                   |             |       |
+| Waterworld                                     | 1995 | Gottlieb               | DMD          | `waterwl2`, `waterwl5`, `waterwld` + 1 more          |             |       |
 | WHO dunnit                                     | 1995 | Bally                  | DMD          | `wd_03r`, `wd_048r`, `wd_10f` + 7 more               | preliminary |       |
 | Airborne                                       | 1996 | Capcom                 | DMD          | `abv105`, `abv106`, `abv106r`                        |             |       |
 | Barb Wire                                      | 1996 | Gottlieb               | DMD          | `barbwire`                                           |             |       |
@@ -1152,8 +1152,8 @@ scripts/gen_supported_machines.py
 
 The script reads a cached copy of OPDB and re-downloads only with `--refresh`; `--check`
 fails if this file is out of date. Machine data comes from the OPDB snapshot of
-**2026-11-14**; driver data from `src/wpc` at the commit this file was generated from, on
-**2026-11-14**.
+**2026-11-16**; driver data from `src/wpc` at the commit this file was generated from, on
+**2026-11-16**.
 
 A machine is one OPDB *group*, so a title and its remakes are one row, dated and credited
 to the original. Its status is that of the *worst* of its ROM sets, so "fully working"
