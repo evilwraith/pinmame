@@ -3797,23 +3797,11 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
             if (fields.contains("mask"))
                parseAddress(fields["mask"], byteMask);
             int nibble = 0;
-            // A field that names its own mask has been authored against the byte as it stands, so a
-            // nibble declared by the platform's memory_layout must not silently reinterpret it. Both
-            // are byte-level rules and applying them together destroys the field: centaur reads its
-            // game-over lamp as mask 0x04 at 0x20C, which the bally-35-8K layout covers with a
-            // high-nibble NVRAM region, and 0x04 selects a bit the high nibble does not contain --
-            // masking then shifting yields 0 for every byte the machine can hold.
-            //
-            // A nibble on the field itself still wins below: that is the author saying so directly,
-            // and the same map does exactly that for current_ball and player_count, which share a
-            // byte at 0x0B.
-            const bool fieldNamesItsOwnMask = fields.contains("mask");
             for (const auto& region : memRegions)
             {
                if (region.start <= offsets[0] && offsets[0] <= region.end)
                {
-                  if (!fieldNamesItsOwnMask)
-                     nibble = region.nibble;
+                  nibble = region.nibble;
                   break;
                }
             }
@@ -3894,82 +3882,63 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
                   const uint8_t* const ptr = MainCPUReadBase(baseOffset);
                   if (ptr == nullptr)
                      return false;
-                  if (isBCD)
+                  // As the format's reference parser (py-pinmame-nvmaps nvram_parser.py, get_bytes) does: the bytes of the field
+                  // in big endian order; for a 4-bit memory (nibble of the field, or of the platform region holding it), the
+                  // selected nibble of each byte, packed two by two into bytes (a lone first nibble when their count is odd); then
+                  // the mask, which applies to these packed bytes. A mask is authored against the value as the machine stores it:
+                  // a lamp of a Bally 5101 RAM, kept by PinMAME in the high nibble of its byte with the low nibble set to 0xF, is
+                  // 'mask 0x04' (bit 2 of the nibble), not 0x40, and a mask applied to the whole byte reads the 0xF.
+                  uint8_t bytes[32];
+                  size_t count = 0;
+                  uint8_t packed = 0;
+                  size_t remaining = std::min(offsets.size(), sizeof(bytes) * (nibble == 0 ? 1 : 2));
+                  // A lone first nibble is packed under a 0 high digit that is padding, not a digit of the field
+                  const bool padFirstHighDigit = nibble != 0 && (remaining % 2) == 1;
+                  const auto push = [&](unsigned int offset)
                   {
-                     // A nibble outside 0..9 is not a digit. Scoring it as 0 makes blanked memory
-                     // read as a confident zero, which a caller cannot tell apart from a real zero
-                     // score: centaur keeps its scores in display memory that reads 0xFF while
-                     // blanked, so a poll landing there reported 0 and flattened a live game total.
-                     //
-                     // A field holding no valid digit at all is therefore reported as unreadable.
-                     // The arithmetic below is unchanged, so any field with even one real digit
-                     // decodes exactly as it did before and this cannot reject a value it used to
-                     // return.
-                     bool sawDigit = false;
-                     const auto addByte = [&](uint8_t num)
-                        {
-                           const uint8_t dig1 = (num & 0x0F);
-                           const uint8_t dig2 = (num >> 4);
-                           if (nibble == 0)
-                           {
-                              v = (v * 100) + (dig2 > 9 ? 0 : dig2 * 10) + (dig1 > 9 ? 0 : dig1);
-                              sawDigit = sawDigit || dig1 <= 9 || dig2 <= 9;
-                           }
-                           else if (nibble == 1)
-                           {
-                              v = (v * 10) + (dig1 > 9 ? 0 : dig1);
-                              sawDigit = sawDigit || dig1 <= 9;
-                           }
-                           else if (nibble == 2)
-                           {
-                              v = (v * 10) + (dig2 > 9 ? 0 : dig2);
-                              sawDigit = sawDigit || dig2 <= 9;
-                           }
-                        };
-
-                     if (isLittleEndian)
-                     {
-                        for (auto it = offsets.rbegin(); it != offsets.rend(); ++it)
-                           addByte((*(ptr + *it - baseOffset)) & byteMask);
-                     }
+                     if (remaining == 0)
+                        return;
+                     const uint8_t b = *(ptr + offset - baseOffset);
+                     remaining--;
+                     if (nibble == 0)
+                        bytes[count++] = b & byteMask;
                      else
                      {
-                        for (auto offset : offsets)
-                           addByte((*(ptr + offset - baseOffset)) & byteMask);
+                        packed = static_cast<uint8_t>((packed << 4) | (nibble == 1 ? (b & 0x0F) : (b >> 4)));
+                        if (remaining % 2 == 0)
+                        {
+                           bytes[count++] = packed & byteMask;
+                           packed = 0;
+                        }
                      }
-
-                     if (!sawDigit)
-                        return false;
-                  }
+                  };
+                  if (isLittleEndian)
+                     for (auto it = offsets.rbegin(); it != offsets.rend(); ++it)
+                        push(*it);
                   else
+                     for (const auto offset : offsets)
+                        push(offset);
+                  // A nibble outside 0..9 is not a digit. Scoring it as 0 makes blanked memory read as a confident zero,
+                  // which a caller cannot tell apart from a real zero score: centaur keeps its scores in display memory
+                  // that reads 0xFF while blanked, so a poll landing there reported 0 and flattened a live game total.
+                  // A BCD field holding no valid digit at all is therefore reported as unreadable; any field with even
+                  // one real digit decodes exactly as the arithmetic below says.
+                  bool sawDigit = false;
+                  for (size_t i = 0; i < count; i++)
                   {
-                     if (isLittleEndian)
+                     const uint8_t num = bytes[i];
+                     if (isBCD)
                      {
-                        for (auto it = offsets.rbegin(); it != offsets.rend(); ++it)
-                        {
-                           const uint8_t num = (*(ptr + *it - baseOffset)) & byteMask;
-                           if (nibble == 0)
-                              v = (v << 8) | num;
-                           else if (nibble == 1)
-                              v = (v << 4) | (num & 0x0F);
-                           else if (nibble == 2)
-                              v = (v << 4) | (num >> 4);
-                        }
+                        const uint8_t dig1 = (num & 0x0F);
+                        const uint8_t dig2 = (num >> 4);
+                        v = (v * 100) + (dig2 > 9 ? 0 : dig2 * 10) + (dig1 > 9 ? 0 : dig1);
+                        sawDigit = sawDigit || dig1 <= 9 || (dig2 <= 9 && !(i == 0 && padFirstHighDigit));
                      }
                      else
-                     {
-                        for (auto offset : offsets)
-                        {
-                           const uint8_t num = (*(ptr + offset - baseOffset)) & byteMask;
-                           if (nibble == 0)
-                              v = (v << 8) | num;
-                           else if (nibble == 1)
-                              v = (v << 4) | (num & 0x0F);
-                           else if (nibble == 2)
-                              v = (v << 4) | (num >> 4);
-                        }
-                     }
+                        v = (v << 8) | num;
                   }
+                  if (isBCD && !sawDigit)
+                     return false;
 
                   if (valueOffset != 0.0 || valueScale != 1.0)
                      v = static_cast<int64_t>(valueOffset + valueScale * static_cast<double>(v));
