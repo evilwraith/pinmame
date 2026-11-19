@@ -510,6 +510,14 @@ void p2k_state::install_fast_windows()
 	m_program->add_fast_window(0x00000000, m_main_ram.data(), 0x000a0000);
 	m_program->add_fast_window(0x40800000, m_vram.data(), m_vram.size());
 	m_program->add_fast_window(0xc0800000, m_vram.data(), m_vram.size());
+#if !P2K_DEBUG && defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+	// The MediaGX scratchpad, last because it is the least of them - but the blit routines refill
+	// its 640-word BLT buffer with the colour key before every transparent blit, some 400000
+	// stores a second in a game, each of which otherwise walks mem_w's whole decode to get here.
+	// It is kept as host dwords, which is the guest's byte order only on a little endian host,
+	// and a debug build counts the writes (m_scratchpad_gen), so neither of those gets the window
+	m_program->add_fast_window(0x40000400, reinterpret_cast<u8 *>(m_scratchpad), sizeof(m_scratchpad));
+#endif
 }
 
 // ---------------------------------------------------------------- machine

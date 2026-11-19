@@ -319,7 +319,7 @@ public:
 	template <typename... T> int add_change_notifier(T &&...) { return 0; }
 
 private:
-	static constexpr unsigned MAX_FAST = 4;
+	static constexpr unsigned MAX_FAST = 5;
 
 	// The guest is little endian and so is every host this is built for; the byte-wise form is
 	// there so a big endian host still produces the same value as the machine's own read_le()
@@ -365,24 +365,26 @@ private:
 		// This runs for EVERY space, as e.g. the I/O space legitimately has none registered.
 		// The count is not what makes the unrolled form below safe anyway: unregistered slots stay
 		// zeroed, and u32(a - 0) < 0 is false for every a, so an empty slot can never match
-		static_assert(MAX_FAST == 4);
+		static_assert(MAX_FAST == 5);
 
-		// Note: A branchless SSE2/NEON form that tested all four at once was tried and removed as it was way slower
+		// Note: A branchless SSE2/NEON form that tested all (then four) at once was tried and removed as it was way slower
 		if (u32(a - m_fast[0].base) < m_fast[0].span) return reinterpret_cast<u8 *>(m_fast[0].adj + a);
 		if (u32(a - m_fast[1].base) < m_fast[1].span) return reinterpret_cast<u8 *>(m_fast[1].adj + a);
 		if (u32(a - m_fast[2].base) < m_fast[2].span) return reinterpret_cast<u8 *>(m_fast[2].adj + a);
 		if (u32(a - m_fast[3].base) < m_fast[3].span) return reinterpret_cast<u8 *>(m_fast[3].adj + a);
+		if (u32(a - m_fast[4].base) < m_fast[4].span) return reinterpret_cast<u8 *>(m_fast[4].adj + a);
 		return nullptr;
 	}
 	// The same over the writable windows: m_fast_w holds each writable window in the slot m_fast
 	// has it in, and a zeroed slot where m_fast holds a read-only one
 	ATTR_FORCE_INLINE u8 *fast_w(const offs_t a) const
 	{
-		static_assert(MAX_FAST == 4);
+		static_assert(MAX_FAST == 5);
 		if (u32(a - m_fast_w[0].base) < m_fast_w[0].span) return reinterpret_cast<u8 *>(m_fast_w[0].adj + a);
 		if (u32(a - m_fast_w[1].base) < m_fast_w[1].span) return reinterpret_cast<u8 *>(m_fast_w[1].adj + a);
 		if (u32(a - m_fast_w[2].base) < m_fast_w[2].span) return reinterpret_cast<u8 *>(m_fast_w[2].adj + a);
 		if (u32(a - m_fast_w[3].base) < m_fast_w[3].span) return reinterpret_cast<u8 *>(m_fast_w[3].adj + a);
+		if (u32(a - m_fast_w[4].base) < m_fast_w[4].span) return reinterpret_cast<u8 *>(m_fast_w[4].adj + a);
 		return nullptr;
 	}
 
@@ -414,14 +416,15 @@ private:
 		// forming the same value as a pointer would be undefined behaviour
 		uintptr_t adj;
 	};
-	// 16 bytes each, so the four windows are exactly one 64-byte line and the aligned table never
-	// straddles two. Each entry is also self-contained: a hit reads base, span and adj from the
+	// 16 bytes each, so the first four windows are exactly one 64-byte line; the fifth starts the
+	// next, and is only looked at by an access the first four have all missed. Register the busy
+	// ones first. Each entry is also self-contained: a hit reads base, span and adj from the
 	// same 16 bytes, rather than from three arrays 16 bytes apart.
 	//
 	// Ordered hottest first: m_fast on every access, m_cb on every miss, m_fast_n only when a
 	// window is registered - fast() deliberately never reads it. Everything after m_fast lands in
-	// the second line either way, so this is for legibility only. m_fast_w, the writable subset
-	// the write paths look up, is a line of its own
+	// a later line either way, so this is for legibility only. m_fast_w, the writable subset
+	// the write paths look up, is aligned the same way
 	alignas(64) win m_fast[MAX_FAST] {};
 	alignas(64) win m_fast_w[MAX_FAST] {};
 	p2k_bus_callbacks m_cb;
