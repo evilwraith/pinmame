@@ -964,6 +964,17 @@ bool p2k_state::frame_rgb(u32* const __restrict dest, unsigned capacity, unsigne
 	for (unsigned y = 0; y < h; ++y)
 	{
 		unsigned off_fb = y * line_delta;
+		// A row that lies inside video memory as a whole - every row, for the geometries the games
+		// program - needs no test per pixel, and without one the copy vectorises
+		if (size_t(off_fb + w) * 2 <= room)
+		{
+			const u16 * const __restrict row = fb16 + off_fb;
+			u32 * const __restrict out = dest + offs;
+			for (unsigned x = 0; x < w; ++x)
+				out[x] = row[x];
+			offs += w;
+			continue;
+		}
 		for (unsigned x = 0; x < w; ++x,++offs,++off_fb)
 		{
 			const unsigned off = off_fb * 2;
