@@ -528,7 +528,15 @@ protected:
 	uint32_t i386_translate(int segment, uint32_t ip, int rwn);
 	inline vtlb_entry get_permissions(uint32_t pte, int wp);
 	bool i386_translate_address(int intention, offs_t *address, vtlb_entry *entry);
-	bool translate_address(int pl, int type, uint32_t *address, uint32_t *error);
+	// PINMAME: every data access comes through here, and with paging off - which is how this
+	// machine's software runs - it is one test. Kept inline so that test does not cost a call
+	ATTR_FORCE_INLINE bool translate_address(int pl, int type, uint32_t *address, uint32_t *error)
+	{
+		if (!(m_cr[0] & 0x80000000)) // Some (very few) old OS's won't work with this
+			return true;
+		return translate_address_paged(pl, type, address, error);
+	}
+	bool translate_address_paged(int pl, int type, uint32_t *address, uint32_t *error);
 	void CHANGE_PC(uint32_t pc);
 	// PINMAME: NEAR_BRANCH is also a hot function in the core (via i386_jmp_rel8)
 	ATTR_FORCE_INLINE void NEAR_BRANCH(int32_t offs)
