@@ -878,6 +878,49 @@ and the instruction being resumed) are taken exactly where they were. Cycle for 
 machine: the recorded game above stays bit-identical, for 2-3 % less CPU over the whole run (about
 9 % over boot and attract, where the memory tests are the same instruction).
 
+### The block cache
+
+The interpreter's cost is not in any one place. On a Cortex-A76 a guest instruction took about 140
+host instructions: some 45 in the loop around it (sample the interrupt lines, reset the prefix
+state, fetch the opcode, look the handler up, check trap flag, lock and resume flag), the rest in
+the handler fetching and decoding operands it had fetched and decoded the last time round.
+`mame/cpu/i386/p2k_blocks.hxx` remembers what a run of instructions decoded to and runs that.
+
+It has two layers, and the first is exact by construction:
+
+* **A block is a list of the interpreter's own handlers.** Running it calls them in order; they
+  still fetch their operands, compute their flags and charge their cycles. What is left out is
+  only what cannot have changed inside a block - no instruction that does port I/O or changes
+  IF, TF, a segment or a control register is ever put in one, a block is entered only in the state
+  it was decoded for, and it ends as soon as the timeslice is used up, an instruction ends
+  anywhere but where the block expected (so a mistake in the length table costs speed, not
+  correctness), an interrupt line moves, or an instruction stores into the block's own bytes. A
+  block's bytes are compared with memory every time it is entered, so nothing has to be told
+  when code is loaded, patched or overwritten.
+* **The common instruction forms are pre-decoded** - `mov`, the ALU group, `lea`, `push`/`pop`,
+  `inc`/`dec`, shifts by a constant, `movzx`/`movsx`, calls, returns and jumps - with registers,
+  displacement and immediate picked apart when the block is built. Each is its handler's body
+  with the fetches removed, built from the same helpers. The cycle cost is not written down a
+  second time: an instruction goes through its handler until what the handler charged has been
+  seen (each way, for a conditional jump) and switches over only then.
+
+Two things check it. The video of a recorded 14000-frame Revenge From Mars game is bit-identical
+with the cache on, and `P2K_BLOCK_CHECK=1` builds a self-test in which every pre-decoded
+instruction is run both ways - pre-decoded with its stores held back, then through its handler -
+and registers, flags, cycles, stores and the decoder's leftover state are compared; a device is
+shown one read, not two. That recording is more than two billion such comparisons without a difference.
+
+In it 82 % of all instructions run pre-decoded and another 13 % through a handler inside a block.
+CPU for the recording on one Cortex-A76: 154.6 s without the cache, 150.5 s with blocks of
+handlers alone, 118.5 s with the pre-decoded forms (and a frame copy loop fixed alongside).
+Where the time goes after that: the block loop and its pre-decoded forms a half, the sound board
+a fifth, handlers 8 %, video 7 %. What is left to take, roughly in order: entering a block (the
+lookup and the byte compare are a tenth of everything), one indirect jump per instruction where
+threaded dispatch would give each form its own, and the forms not pre-decoded yet - the byte ALU
+group, the 16-bit forms behind `66`, `pushf`.
+
+Not in a `P2K_DEBUG` or `MAME_DEBUG` build, whose per-instruction hook and exceptions it would bypass.
+
 ## Possible performance related extensions
 
 ### Sound and CPU on separate cores

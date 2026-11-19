@@ -564,24 +564,31 @@ protected:
 	ATTR_FORCE_INLINE void p2k_fetch_flush() { m_fetch_len = 0; } // PINMAME: drop the cursor
 	inline uint16_t FETCH16();
 	inline uint32_t FETCH32();
+#if defined(P2K_BLOCK_CHECK) && P2K_BLOCK_CHECK
+#define P2K_CHK_WRITE(size) if (p2k_chk_write(ea, size, value)) return;
+#define P2K_CHK_READ(size) { uint32_t chk; if (m_chk_mode && p2k_chk_read(ea, size, chk)) return chk; }
+#else
+#define P2K_CHK_WRITE(size)
+#define P2K_CHK_READ(size)
+#endif
 	// PINMAME: the common case of each access, inline. With paging off and A20 unmasked the PL
 	// functions' translate and mask change nothing, and for an access that does not straddle a
 	// bus dword what is left of them is the one bus call made here - so this is their `case 0`
 	// (and `case 2` for words) without the virtual call around it. Everything else, paging and
 	// the unaligned splits included, still goes to them
 	ATTR_FORCE_INLINE bool p2k_flat() const { return !(m_cr[0] & 0x80000000) && m_a20_mask == 0xffffffffu; }
-	ATTR_FORCE_INLINE uint8_t READ8(uint32_t ea) { if (p2k_flat()) return m_program->read_byte(ea); return READ8PL(ea, m_CPL); }
-	ATTR_FORCE_INLINE uint16_t READ16(uint32_t ea) { if (!(ea & 1) && p2k_flat()) return m_program->read_word(ea); return READ16PL(ea, m_CPL); }
-	ATTR_FORCE_INLINE uint32_t READ32(uint32_t ea) { if (!(ea & 3) && p2k_flat()) return m_program->read_dword(ea); return READ32PL(ea, m_CPL); }
+	ATTR_FORCE_INLINE uint8_t READ8(uint32_t ea) { P2K_CHK_READ(1) if (p2k_flat()) return m_program->read_byte(ea); return READ8PL(ea, m_CPL); }
+	ATTR_FORCE_INLINE uint16_t READ16(uint32_t ea) { P2K_CHK_READ(2) if (!(ea & 1) && p2k_flat()) return m_program->read_word(ea); return READ16PL(ea, m_CPL); }
+	ATTR_FORCE_INLINE uint32_t READ32(uint32_t ea) { P2K_CHK_READ(4) if (!(ea & 3) && p2k_flat()) return m_program->read_dword(ea); return READ32PL(ea, m_CPL); }
 	inline uint64_t READ64(uint32_t ea) { return READ64PL(ea, m_CPL); }
 	virtual uint8_t READ8PL(uint32_t ea, uint8_t privilege);
 	virtual uint16_t READ16PL(uint32_t ea, uint8_t privilege);
 	virtual uint32_t READ32PL(uint32_t ea, uint8_t privilege);
 	virtual uint64_t READ64PL(uint32_t ea, uint8_t privilege);
 	inline void WRITE_TEST(uint32_t ea);
-	ATTR_FORCE_INLINE void WRITE8(uint32_t ea, uint8_t value) { if (p2k_flat()) { m_program->write_byte(ea, value); return; } WRITE8PL(ea, m_CPL, value); }
-	ATTR_FORCE_INLINE void WRITE16(uint32_t ea, uint16_t value) { if (!(ea & 1) && p2k_flat()) { m_program->write_word(ea, value); return; } WRITE16PL(ea, m_CPL, value); }
-	ATTR_FORCE_INLINE void WRITE32(uint32_t ea, uint32_t value) { if (!(ea & 3) && p2k_flat()) { m_program->write_dword(ea, value); return; } WRITE32PL(ea, m_CPL, value); }
+	ATTR_FORCE_INLINE void WRITE8(uint32_t ea, uint8_t value) { p2k_blk_store(ea, 1); P2K_CHK_WRITE(1) if (p2k_flat()) { m_program->write_byte(ea, value); return; } WRITE8PL(ea, m_CPL, value); }
+	ATTR_FORCE_INLINE void WRITE16(uint32_t ea, uint16_t value) { p2k_blk_store(ea, 2); P2K_CHK_WRITE(2) if (!(ea & 1) && p2k_flat()) { m_program->write_word(ea, value); return; } WRITE16PL(ea, m_CPL, value); }
+	ATTR_FORCE_INLINE void WRITE32(uint32_t ea, uint32_t value) { p2k_blk_store(ea, 4); P2K_CHK_WRITE(4) if (!(ea & 3) && p2k_flat()) { m_program->write_dword(ea, value); return; } WRITE32PL(ea, m_CPL, value); }
 	inline void WRITE64(uint32_t ea, uint64_t value) { WRITE64PL(ea, m_CPL, value); }
 	virtual void WRITE8PL(uint32_t ea, uint8_t privilege, uint8_t value);
 	virtual void WRITE16PL(uint32_t ea, uint8_t privilege, uint16_t value);
@@ -1754,6 +1761,86 @@ protected:
 	void zero_state();
 	void i386_set_a20_line(int state);
 
+	// PINMAME: the block cache in front of the interpreter, see p2k_blocks.hxx. Not in a debug
+	// build, whose per-instruction hook and exceptions it would bypass
+#define P2K_BLOCKS (!P2K_DEBUG && !MAME_DEBUG)
+	struct p2k_op
+	{
+		i386_op_func handler;   // the interpreter's own handler for the first opcode byte
+		uint32_t disp;          // of the memory operand, or of a jump
+		uint32_t imm;
+		uint32_t bmask, imask;  // all ones where the memory operand has a base / an index register
+		uint16_t end;           // where the instruction ends, in bytes from the block's start
+		uint8_t opcode;         // its first byte: m_opcode going into the handler
+		uint8_t opfinal;        // m_opcode coming out of it (the last opcode byte)
+		uint8_t flags;
+		uint8_t kind;           // how it runs now: 0 through the handler, else pre-decoded
+		uint8_t want;           // the pre-decoded form it takes once its cycles are known, or 0
+		uint8_t known;          // bit 0: cyc seen, bit 1: cyc2 seen
+		uint8_t r, rm;          // registers, as indices into the register file
+		uint8_t base, index, scale, seg;
+		uint8_t cyc, cyc2;      // cycles it charges; cyc2 a conditional jump when taken
+	};
+	struct p2k_block
+	{
+		const uint8_t *host;    // the block's bytes in host memory
+		uint32_t pc;
+		uint16_t nbytes;        // bytes the block was decoded from: a copy follows, then nops ops
+		uint16_t nops;          // 0: nothing decodable here
+	};
+	uint32_t m_blk_lo = 0, m_blk_len = 0;   // the running block's bytes, [lo, lo + len); len 0 = none running
+	uint8_t m_blk_dirty = 0;                // set to end the running block after the current instruction
+	uint32_t m_blk_used = 0;
+	std::unique_ptr<uint32_t[]> m_blk_table;
+	std::unique_ptr<uint8_t[]> m_blk_arena;
+	static int p2k_block_class(const uint8_t *p, unsigned avail, bool op16, unsigned &len);
+	p2k_block *p2k_block_build(uint32_t pc);
+	bool p2k_block_run();
+	static bool p2k_spec_ea(const uint8_t *m, p2k_op &o);
+	static void p2k_spec_decode(const uint8_t *p, unsigned len, p2k_op &o);
+	bool p2k_spec(const p2k_op *op, uint32_t eip0, uint32_t pc0);
+	void p2k_spec_learn(p2k_op *op, int cycles, bool fell_through);
+#ifndef P2K_BLOCK_CHECK
+#define P2K_BLOCK_CHECK 0
+#endif
+#if P2K_BLOCK_CHECK
+	// the self-test: 1 = stores are recorded and not made, 2 = recorded and made
+	struct p2k_chk_store { uint32_t ea, size, value; };
+	int m_chk_mode = 0;
+	unsigned m_chk_n = 0;
+	p2k_chk_store m_chk_log[16];
+	bool p2k_chk_write(uint32_t ea, uint32_t size, uint32_t value)
+	{
+		if (!m_chk_mode) return false;
+		if (m_chk_n < 16) m_chk_log[m_chk_n] = { ea, size, value };
+		m_chk_n++;
+		return m_chk_mode == 1;
+	}
+	// a device must see one read, not two: the first run's reads of anything that is not plain
+	// memory are kept and handed to the second
+	struct p2k_chk_load { uint32_t ea, size, value; bool used; };
+	unsigned m_chk_rn = 0;
+	p2k_chk_load m_chk_rlog[8];
+	bool p2k_chk_read(uint32_t ea, uint32_t size, uint32_t &value)
+	{
+		if (m_program->read_ptr(ea) && m_program->read_ptr(ea + size - 1)) return false;
+		if (m_chk_mode == 1)
+		{
+			const int mode = m_chk_mode; m_chk_mode = 0;
+			value = (size == 1) ? READ8PL(ea, m_CPL) : (size == 2) ? READ16PL(ea, m_CPL) : READ32PL(ea, m_CPL);
+			m_chk_mode = mode;
+			if (m_chk_rn < 8) m_chk_rlog[m_chk_rn++] = { ea, size, value, false };
+			return true;
+		}
+		for (unsigned i = 0; i < m_chk_rn; i++)
+			if (!m_chk_rlog[i].used && m_chk_rlog[i].ea == ea && m_chk_rlog[i].size == size) { m_chk_rlog[i].used = true; value = m_chk_rlog[i].value; return true; }
+		return false;
+	}
+	void p2k_chk_op(const p2k_op *op, uint32_t eip0, uint32_t pc0);
+#endif
+	// a store into the running block's own bytes ends it: the next instruction may no longer be
+	// the one it holds. One compare; nothing can match while no block runs
+	ATTR_FORCE_INLINE void p2k_blk_store(uint32_t ea, uint32_t size) { if (uint32_t(ea + size - 1 - m_blk_lo) < m_blk_len + size - 1) m_blk_dirty = 1; }
 };
 
 

@@ -2686,6 +2686,7 @@ void i386_device::leave_smm()
 
 void i386_device::execute_set_input(int irqline, int state)
 {
+	m_blk_dirty = 1; // PINMAME: a line moved, so a running block ends and the lines are sampled again
 	if ( irqline == INPUT_LINE_A20 )
 	{
 		i386_set_a20_line( state );
@@ -2752,6 +2753,8 @@ void i386_device::i386_set_a20_line(int state)
 	vtlb_flush_dynamic();
 }
 
+#include "p2k_blocks.hxx" // PINMAME
+
 void i386_device::execute_run()
 {
 	int cycles = m_cycles;
@@ -2797,6 +2800,12 @@ void i386_device::execute_run()
 				}
 			}
 		}
+
+#if P2K_BLOCKS
+		// PINMAME: a run of instructions seen before goes through the block cache
+		if (p2k_block_run())
+			continue;
+#endif
 
 		// PINMAME: grouped by destination, not by topic. The members were laid out so three of
 		// these are consecutive bytes and three more consecutive dwords (see p2k_assert_layout()),
