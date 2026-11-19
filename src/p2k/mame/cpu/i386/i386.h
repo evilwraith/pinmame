@@ -809,6 +809,7 @@ protected:
 	void i386_outsd();
 	void i386_repeat(int invert_flag);
 	void p2k_rep_stosd_bulk(uint32_t repeated_pc); // PINMAME
+	bool p2k_modrm_to_EA_fast(uint8_t mod_rm, uint32_t &ea, uint8_t &segment); // PINMAME
 	void i386_rep();
 	void i386_repne();
 	void i386_sahf();

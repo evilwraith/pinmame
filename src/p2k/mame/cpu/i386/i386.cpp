@@ -1507,11 +1507,38 @@ void i386_device::modrm_to_EA(uint8_t mod_rm, uint32_t* out_ea, uint8_t* out_seg
 	}
 }
 
+// PINMAME: modrm_to_EA() for the forms compiled code is made of - 32-bit addressing with no SIB
+// byte, so [reg], [reg+disp8], [reg+disp32] and [disp32] - without the call and the two results
+// passed through memory. Same fetches in the same order as the switch above takes for them;
+// DREGS is in encoding order, so rm indexes the register file directly. False (nothing fetched,
+// nothing changed) for a SIB byte or 16-bit addressing, which stay with modrm_to_EA()
+ATTR_FORCE_INLINE bool i386_device::p2k_modrm_to_EA_fast(uint8_t mod_rm, uint32_t &ea, uint8_t &segment)
+{
+	const uint8_t rm = mod_rm & 0x7, mod = mod_rm >> 6;
+	if (!m_address_size || rm == 4 || mod == 3) // mod 3 is no memory operand: modrm_to_EA() reports it
+		return false;
+
+	if (rm == 5 && mod == 0) {
+		ea = FETCH32(); segment = DS;
+	} else {
+		ea = REG32(rm); segment = (rm == 5) ? SS : DS;
+		if (mod == 1)
+			ea += (int32_t)(int8_t)FETCH();
+		else if (mod == 2)
+			ea += FETCH32();
+	}
+
+	if (m_segment_prefix)
+		segment = m_segment_override;
+	return true;
+}
+
 uint32_t i386_device::GetNonTranslatedEA(uint8_t modrm,uint8_t *seg)
 {
 	uint8_t segment;
 	uint32_t ea;
-	modrm_to_EA(modrm, &ea, &segment );
+	if (!p2k_modrm_to_EA_fast(modrm, ea, segment))
+		modrm_to_EA(modrm, &ea, &segment );
 	if(seg) *seg = segment;
 	return ea;
 }
@@ -1520,7 +1547,8 @@ uint32_t i386_device::GetEA(uint8_t modrm, int rwn)
 {
 	uint8_t segment;
 	uint32_t ea;
-	modrm_to_EA(modrm, &ea, &segment );
+	if (!p2k_modrm_to_EA_fast(modrm, ea, segment))
+		modrm_to_EA(modrm, &ea, &segment );
 	return i386_translate(segment, ea, rwn );
 }
 
