@@ -564,18 +564,24 @@ protected:
 	ATTR_FORCE_INLINE void p2k_fetch_flush() { m_fetch_len = 0; } // PINMAME: drop the cursor
 	inline uint16_t FETCH16();
 	inline uint32_t FETCH32();
-	inline uint8_t READ8(uint32_t ea) { return READ8PL(ea, m_CPL); }
-	inline uint16_t READ16(uint32_t ea) { return READ16PL(ea, m_CPL); }
-	inline uint32_t READ32(uint32_t ea) { return READ32PL(ea, m_CPL); }
+	// PINMAME: the common case of each access, inline. With paging off and A20 unmasked the PL
+	// functions' translate and mask change nothing, and for an access that does not straddle a
+	// bus dword what is left of them is the one bus call made here - so this is their `case 0`
+	// (and `case 2` for words) without the virtual call around it. Everything else, paging and
+	// the unaligned splits included, still goes to them
+	ATTR_FORCE_INLINE bool p2k_flat() const { return !(m_cr[0] & 0x80000000) && m_a20_mask == 0xffffffffu; }
+	ATTR_FORCE_INLINE uint8_t READ8(uint32_t ea) { if (p2k_flat()) return m_program->read_byte(ea); return READ8PL(ea, m_CPL); }
+	ATTR_FORCE_INLINE uint16_t READ16(uint32_t ea) { if (!(ea & 1) && p2k_flat()) return m_program->read_word(ea); return READ16PL(ea, m_CPL); }
+	ATTR_FORCE_INLINE uint32_t READ32(uint32_t ea) { if (!(ea & 3) && p2k_flat()) return m_program->read_dword(ea); return READ32PL(ea, m_CPL); }
 	inline uint64_t READ64(uint32_t ea) { return READ64PL(ea, m_CPL); }
 	virtual uint8_t READ8PL(uint32_t ea, uint8_t privilege);
 	virtual uint16_t READ16PL(uint32_t ea, uint8_t privilege);
 	virtual uint32_t READ32PL(uint32_t ea, uint8_t privilege);
 	virtual uint64_t READ64PL(uint32_t ea, uint8_t privilege);
 	inline void WRITE_TEST(uint32_t ea);
-	inline void WRITE8(uint32_t ea, uint8_t value) { WRITE8PL(ea, m_CPL, value); }
-	inline void WRITE16(uint32_t ea, uint16_t value) { WRITE16PL(ea, m_CPL, value); }
-	inline void WRITE32(uint32_t ea, uint32_t value) { WRITE32PL(ea, m_CPL, value); }
+	ATTR_FORCE_INLINE void WRITE8(uint32_t ea, uint8_t value) { if (p2k_flat()) { m_program->write_byte(ea, value); return; } WRITE8PL(ea, m_CPL, value); }
+	ATTR_FORCE_INLINE void WRITE16(uint32_t ea, uint16_t value) { if (!(ea & 1) && p2k_flat()) { m_program->write_word(ea, value); return; } WRITE16PL(ea, m_CPL, value); }
+	ATTR_FORCE_INLINE void WRITE32(uint32_t ea, uint32_t value) { if (!(ea & 3) && p2k_flat()) { m_program->write_dword(ea, value); return; } WRITE32PL(ea, m_CPL, value); }
 	inline void WRITE64(uint32_t ea, uint64_t value) { WRITE64PL(ea, m_CPL, value); }
 	virtual void WRITE8PL(uint32_t ea, uint8_t privilege, uint8_t value);
 	virtual void WRITE16PL(uint32_t ea, uint8_t privilege, uint16_t value);
