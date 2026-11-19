@@ -43,6 +43,7 @@ static int video_mode_announced = 0;
 /* implemented in src/p2k/p2k_pinmame.cpp */
 extern void p2k_pinmame_start(const unsigned char *prism, unsigned prismLen, const unsigned char *updates, unsigned updatesLen);
 extern void p2k_pinmame_stop(void);
+extern int p2k_pinmame_read_memory(UINT32 address, unsigned char *buffer, int size);
 extern void p2k_pinmame_nvram_set(int which, const unsigned char *data, unsigned size);
 extern unsigned p2k_pinmame_nvram_get(int which, unsigned char *data, unsigned size);
 extern UINT32 p2k_pinmame_read(offs_t address, UINT32 mem_mask);
@@ -650,6 +651,15 @@ static void p2k_dumpNames(void) {
 }
 #endif
 
+/* The game's memory, for libpinmame's memory maps and PinmameReadMainCPUMemory: CPU 0 is the
+   subsystem's bus handler, so its memory holds nothing a host could read (core_readMemoryHook). Main
+   RAM, where the game's variables are, and the CMOS, where its records are kept as it writes them -
+   the copy the NVRAM handler has is the one loaded at start */
+static int p2k_readMemory(UINT32 address, UINT8 *buffer, int size)
+{
+  return p2k_pinmame_read_memory(address, buffer, size);
+}
+
 static MACHINE_INIT(p2k) {
   video_mode_announced = 0;
 
@@ -676,6 +686,7 @@ static MACHINE_INIT(p2k) {
   p2k_pinmame_set_switch_source(coreGlobals.swMatrix);
   p2k_initPwm();
   p2klocals.ready = 1;
+  core_readMemoryHook = p2k_readMemory;
   if (p2k_nvLoaded) { /* whatever PinMAME had on file, after the reset that fills in the EEPROM defaults */
     p2k_pinmame_nvram_set(P2K_NV_BLOCK_CMOS,   p2k_nvCmos,   P2K_NV_CMOS_SIZE);
     p2k_pinmame_nvram_set(P2K_NV_BLOCK_EEPROM, p2k_nvEeprom, P2K_NV_EEPROM_SIZE);
@@ -700,6 +711,7 @@ static MACHINE_STOP(p2k) {
   p2k_pinmame_nvram_get(P2K_NV_BLOCK_EEPROM, p2k_nvEeprom, P2K_NV_EEPROM_SIZE);
   p2k_pinmame_nvram_get(P2K_NV_BLOCK_RTC,    p2k_nvRtc,    P2K_NV_RTC_SIZE);
   p2k_pinmame_stop();
+  core_readMemoryHook = NULL; /* after the stop: a read meanwhile finds no machine and gets nothing */
 }
 
 MACHINE_DRIVER_START(p2k)

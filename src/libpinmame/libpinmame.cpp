@@ -3739,6 +3739,11 @@ static void SetMemMapImpl(uint8_t* platform, size_t platformSize, uint8_t* game,
 
          if (!fields.contains("encoding") || !fields["encoding"].is_string())
             return;
+         // A field naming its record ("tag", platforms with a tag_directory: Pinball 2000's CMOS) has
+         // a 'start' inside that record, not an address, and the record moves from machine to machine.
+         // Not a state: a host that wants it resolves the tag against the directory itself
+         if (fields.contains("tag"))
+            return;
          const std::string encoding = fields["encoding"].get<std::string>();
          if (encoding == "dipsw")
             return; // Drop as DIP switches are already directly exposed

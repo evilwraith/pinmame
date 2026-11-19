@@ -12,7 +12,14 @@
 
 using UINT32 = u32;
 
-namespace { std::unique_ptr<p2k_state> g_machine; }
+#include <mutex>
+
+namespace {
+std::unique_ptr<p2k_state> g_machine;
+// Held while the machine is created or destroyed and while p2k_pinmame_read_memory() copies from it,
+// which a host may call from any thread. The emulation itself never takes it
+std::mutex g_machine_lock;
+}
 
 extern "C" {
 
@@ -22,7 +29,11 @@ extern "C" {
 void p2k_pinmame_start(const unsigned char *prism, unsigned prismLen,
                        const unsigned char *updates, unsigned updatesLen)
 {
-	g_machine = std::make_unique<p2k_state>();
+	{
+		auto machine = std::make_unique<p2k_state>();
+		const std::lock_guard<std::mutex> lock(g_machine_lock);
+		g_machine = std::move(machine);
+	}
 
 
 	// A failure here means the ROM region is short or absent, which PinMAME's own audit should
@@ -61,7 +72,24 @@ void p2k_pinmame_start(const unsigned char *prism, unsigned prismLen,
 	g_machine->reset();
 }
 
-void p2k_pinmame_stop(void) { g_machine.reset(); }
+void p2k_pinmame_stop(void)
+{
+	std::unique_ptr<p2k_state> machine;
+	{
+		const std::lock_guard<std::mutex> lock(g_machine_lock);
+		machine = std::move(g_machine);
+	}
+}
+
+// Guest memory for a host reading the game's state (src/wpc/p2k.c hands this to core_readMemoryHook):
+// main RAM and the CMOS, see p2k_state::peek(). Any thread; 0 when there is no machine or the range
+// is not readable
+int p2k_pinmame_read_memory(UINT32 address, unsigned char *buffer, int size)
+{
+	if (size <= 0) return 0;
+	const std::lock_guard<std::mutex> lock(g_machine_lock);
+	return g_machine ? int(g_machine->peek(address, buffer, unsigned(size))) : 0;
+}
 
 // Persistent blocks: 0 = CMOS, 1 = PLX EEPROM, 2 = the update flash. PinMAME reads its NVRAM file
 // before the machine is built and writes it after the machine is gone, so the driver buffers the

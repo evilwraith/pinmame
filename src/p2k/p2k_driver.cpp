@@ -445,6 +445,21 @@ bool p2k_state::set_nvram_updates(const u8 *data, size_t len)
 	return true;
 }
 
+unsigned p2k_state::peek(u32 address, u8 *dst, unsigned size) const
+{
+	const auto from = [&](const std::vector<u8> &mem, u32 base, u32 end) -> unsigned {
+		if (address < base || address >= end || size > end - address) return 0;
+		memcpy(dst, mem.data() + (address - base), size);
+		return size;
+	};
+	if (!dst || size == 0) return 0;
+	// the two windows mem_r reads main RAM through; 0xa0000-0xfffff is video, CGA and BIOS memory
+	if (address < 0x000a0000) return from(m_main_ram, 0, 0x000a0000);
+	if (address >= 0x00100000 && address < 0x10000000) return from(m_main_ram, 0, u32(m_main_ram.size()));
+	if (address >= 0x11000000) return from(m_nvram, 0x11000000, 0x11000000 + u32(m_nvram.size()));
+	return 0;
+}
+
 u8 *p2k_state::nvram_block_ptr(nvram_block which, size_t *size)
 {
 	switch (which)

@@ -53,6 +53,11 @@ public:
 	// PinMAME's own NVRAM handler without knowing anything about the machine
 	enum nvram_block { NVRAM_CMOS = 0, NVRAM_EEPROM, NVRAM_UPDATES, NVRAM_RTC };
 	u8 *nvram_block_ptr(nvram_block which, size_t *size);
+	// Copies size bytes of guest memory from address into dst, for a host reading the game's state
+	// (libpinmame's memory maps). Main RAM and the CMOS only, where a read has no side effect, and
+	// only a range inside one of them; 0 otherwise. No lock: the CPU keeps writing while this copies,
+	// so a read is a snapshot of each byte, not of the range as a whole
+	unsigned peek(u32 address, u8 *dst, unsigned size) const;
 
 	void build_machine(u32 cpu_clock);
 	void reset();
