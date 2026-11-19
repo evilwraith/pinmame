@@ -665,6 +665,23 @@ protected:
 			int8_t disp = FETCH();
 			NEAR_BRANCH(disp);
 			CYCLES(171/*CYCLES_JMP_SHORT*/);
+#if !P2K_DEBUG
+			// PINMAME: `jmp $` is the game OS's idle (XINU's null process ends in EB FE and never
+			// HLTs): in Revenge From Mars' attract mode it is 81 % of all instructions executed.
+			// Nothing inside execute_run() can end it - interrupt lines only change between runs,
+			// see p2k_machine::run_cycles() - so once this pass has shown that the next one takes
+			// no interrupt, trap or breakpoint, every remaining pass is this same instruction and
+			// only costs cycles. Take all but the last of them off the count at once; the last
+			// one still runs for real, so the state run() returns with is the one the loop
+			// would have left, cycle for cycle. (The debug build keeps the loop: its
+			// per-instruction hook counts instructions.)
+			if (disp == -2 && m_cycles > 0 && !(m_irq_state && m_IF) && !(m_smi && !m_smm)
+				&& !m_delayed_interrupt_enable && !m_TF && !m_lock && (m_dr[7] & 0xff) == 0)
+			{
+				const int c = (m_cr[0] & 0x1) ? m_cycle_table_pm[171] : m_cycle_table_rm[171];
+				if (c > 0 && m_cycles > c) m_cycles -= ((m_cycles - 1) / c) * c;
+			}
+#endif
 			return;
 		}
 
