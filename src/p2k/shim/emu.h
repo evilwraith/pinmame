@@ -557,6 +557,14 @@ public:
 
 	void timer_set(device_t *device, attotime duration, device_timer_id id, s32 param, void *ptr)
 	{
+		// "Now", for a device: queued instead of taking a timer slot. A temporary timer due at the
+		// current time is the earliest thing pending whenever it is looked at - advance_to() leaves
+		// nothing behind that is due - so a FIFO drained ahead of the timer list fires it at the
+		// same two points the list did (the driver's pump after a PIC write, and the end of the
+		// slice) without the slot search here and the two list scans there. pic8259_device asks
+		// for one of these on every write to it, and the guest masks interrupts through the PICs
+		// constantly: see "The PIC interrupt pump" in README.md
+		if (device && duration.is_zero() && m_zero_n < ZERO_Q) { m_zero_q[m_zero_n++] = { device, id, param, ptr }; return; }
 		emu_timer *t = timer_alloc(device, id, ptr);
 		t->m_temporary = true;
 		t->adjust(duration, param);
@@ -594,6 +602,7 @@ public:
 	// The flag keeps the common case to one test: only a zero-delay adjust() sets it
 	void run_due_timers()
 	{
+		if (m_zero_n) drain_zero_queue();
 		if (!m_zero_pending) return;
 		m_zero_pending = false;
 		advance_to(m_time);
@@ -601,8 +610,16 @@ public:
 	void note_zero_delay() { m_zero_pending = true; }
 
 private:
+	// Zero-delay device timers, see timer_set(). A callback may queue more (the slave PIC's INT
+	// output is the master's IR2), so this runs until the queue stays empty
+	struct zero_call { device_t *device; device_timer_id id; s32 param; void *ptr; };
+	static constexpr unsigned ZERO_Q = 16;
+	void drain_zero_queue();
+
 	std::vector<std::unique_ptr<emu_timer>> m_timers;
 	attotime m_time;
+	zero_call m_zero_q[ZERO_Q];
+	unsigned m_zero_n = 0;
 	bool m_zero_pending = false;
 };
 
@@ -1543,10 +1560,24 @@ inline attotime emu_timer::remaining() const
 	return (m_expire > now) ? m_expire - now : attotime::zero;
 }
 
+inline void device_scheduler::drain_zero_queue()
+{
+	static emu_timer none; // device_timer() takes the timer that fired; these have none, and no device here looks at it
+	for (unsigned i = 0; i < m_zero_n; i++)
+	{
+		const zero_call c = m_zero_q[i];
+		// Compact before the call rather than index a queue the callback appends to: with the
+		// head gone, whatever it queues lands behind what is already waiting, in order
+		if (i + 1 == m_zero_n) { m_zero_n = 0; i = ~0u; }
+		c.device->device_timer(none, c.id, c.param, c.ptr);
+	}
+}
+
 inline void device_scheduler::advance_to(const attotime& target)
 {
 	for (;;)
 	{
+		if (m_zero_n) drain_zero_queue();
 		emu_timer *next = nullptr;
 		for (auto &t : m_timers)
 			if (t->m_in_use && t->m_enabled && (!next || t->m_expire < next->m_expire)) next = t.get();

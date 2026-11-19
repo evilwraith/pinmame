@@ -979,29 +979,18 @@ system has no notion of the PCI-relocatable windows the MediaGX moves at run tim
 
 ### The PIC interrupt pump
 
-`note_zero_delay()` costs something on every PIC write, and it has never been measured.
-`pic8259_device` schedules its zero-delay timer on every write, so by the time the driver reaches
-the pump the pending flag is essentially always set and this is a real scheduler pass -
-`advance_to()` scans the timer list, fires the callback, then scans again to find nothing. From
-`P2K_IOWATCH` the guest writes those ports on the order of once per few hundred cycles, which puts
-it around **2-6%** - an estimate off a log, not a number.
+Done, in the scheduler rather than in the PIC. `pic8259_device` schedules a zero-delay timer on every
+write, and the driver's pump (`pics_settle()`) used to run it through a full scheduler pass: a slot
+search to allocate the temporary timer, then `advance_to()` scanning the timer list, firing the
+callback and scanning again to find nothing. The guest masks interrupts through the PICs around every
+critical section (XINU's `disable()`/`restore()`, four writes a pair), so that was paid constantly.
 
-The comparison with what it replaced is not as favourable as it looks either. The `clkint` gate now
-defaults off, and off it costs nothing at all: without `P2K_DEBUG` the frame tracking and the
-per-instruction hook are not compiled in, and `shim/debugger.h` leaves the i386 execute loop with no
-call site. So this trades a per-instruction tax for a per-PIC-write one, and which is cheaper is
-genuinely open.
-
-It cannot be measured with what is here - `report_progress()`'s `host=` and `mips=` are `P2K_DEBUG`
-only, and the configuration in question is a release build. That needs PinMAME's own speed readout
-or a timed fixed run.
-
-If it does cost, the expense is the route rather than the pump: two whole timer-list scans to reach
-one device we already know we want. A `check_irqs_now()` on `pic8259_device` doing what its
-`device_timer(TIMER_CHECK_IRQ)` does would let the driver call it straight - no scan, no flag - and
-`note_zero_delay()` would drop back to a backstop for other devices. Not done, only because it means
-editing imported MAME code this port has otherwise kept pristine. Worth doing with a number in hand.
-
+`device_scheduler::timer_set()` now queues a device's zero-delay request instead of taking a timer
+slot, and `run_due_timers()`/`advance_to()` drain that queue ahead of the list. A temporary timer
+due "now" was always the earliest thing pending, so it fires at the same two points as before - the
+pump after a PIC write, and the end of the slice - and `mame/machine/pic8259.cpp` stays as imported.
+The video of a recorded 14000-frame Revenge From Mars game (boot, attract, a ball in play) is
+bit-identical before and after; that run costs about 1 % less CPU, and boot plus attract alone 3 %.
 
 ### Smaller items
 
