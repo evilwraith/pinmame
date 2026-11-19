@@ -865,6 +865,19 @@ can see a sound board that has stopped answering, so changes in here get judged 
 **Important Note**: SWEP1s intro (infamous scrolling text) does fail to read the 2nd sentence.
 We need to check if this is due to the skip hacks above!
 
+### `rep stosd` is stored as a run
+
+The games clear their frame buffers and bitmaps with `rep stosd` (Allegro's
+`_linear_clear_to_color16`), and in Revenge From Mars that single instruction is about a tenth of the
+guest's time, in attract and in play alike. The interpreter's repeat loop re-fetches and
+re-dispatches the opcode, re-checks the segment, translates the address and looks the bus up again
+for every dword. `p2k_rep_stosd_bulk()` in `mame/cpu/i386/i386ops.hxx` stores the leading passes as
+one run when they provably cannot differ - the conditions are listed there - and leaves at least the
+last pass to the loop, so both ways out of the instruction (count exhausted, or the timeslice ending
+and the instruction being resumed) are taken exactly where they were. Cycle for cycle the same
+machine: the recorded game above stays bit-identical, for 2-3 % less CPU over the whole run (about
+9 % over boot and attract, where the memory tests are the same instruction).
+
 ## Possible performance related extensions
 
 ### Sound and CPU on separate cores

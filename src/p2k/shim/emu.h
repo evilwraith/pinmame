@@ -301,6 +301,15 @@ public:
 		return false;
 	}
 
+	// The same over the writable windows, for a caller that stores a run itself (the i386 core's
+	// rep stosd; see p2k_rep_stosd_bulk() in mame/cpu/i386/i386ops.hxx). Same invalidation rule
+	bool direct_range_w(offs_t a, uintptr_t &adj, u32 &lo, u32 &len) const
+	{
+		for (const auto &w : m_fast_w)
+			if (u32(a - w.base) < w.span) { adj = w.adj; lo = w.base; len = w.span; return true; }
+		return false;
+	}
+
 	static constexpr int data_width() { return 32; }
 	template <typename... T> memory_passthrough_handler *install_read_tap(T &&...)      { return nullptr; }
 	template <typename... T> memory_passthrough_handler *install_write_tap(T &&...)     { return nullptr; }

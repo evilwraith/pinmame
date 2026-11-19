@@ -1096,6 +1096,104 @@ void i386_device::i386_outsd()             // Opcode 0x6f
 	i386_outs_generic(4);
 }
 
+// PINMAME: the leading iterations of a `rep stosd`, stored as one run.
+//
+// The games clear their frame buffers and bitmaps with it (Allegro's _linear_clear_to_color16),
+// and in Revenge From Mars that one instruction is a tenth of the guest's time. Each pass through
+// the loop in i386_repeat() below re-fetches and re-dispatches the opcode, checks the segment,
+// translates the address and looks the bus up again - to store the same dword four bytes further
+// on. This does as many of those passes at once as can be shown to be identical, and then returns
+// to the loop, which always runs at least the last pass itself: the exits - count reaching zero,
+// or the timeslice running out and the instruction being rewound for the next one - stay where
+// they were, taken on the same pass with the same state.
+//
+// A pass is identical to the ones before it as long as
+//  - the loop would not have left: more than one pass still to go, and cycles left after it
+//  - the segment check cannot fail: protected mode outside V86, ES a valid writable expand-up
+//    data segment, every offset written at or under its limit (the loop only ever checks the
+//    first byte of each store, so that is what is bounded here)
+//  - the store is one aligned dword into plain memory: A20 unmasked, and the physical address
+//    inside one of the bus's writable fast windows. With paging on that is asked page by page,
+//    through the same translate_address() the first store to the page would have called - with
+//    its TLB fill and dirty bit - and a page that faults ends the run so the loop takes the fault
+//  - it does not store over the opcode byte the loop fetches again on the next pass
+// Anything else stays with the loop from that pass on.
+void i386_device::p2k_rep_stosd_bulk(uint32_t repeated_pc)
+{
+	if (!PROTECTED_MODE || V8086_MODE || m_a20_mask != 0xffffffffu)
+		return;
+
+	const int c = m_cycle_table_pm[CYCLES_STOS];
+	const uint32_t ecx = REG32(ECX);
+	if (c <= 0 || m_cycles <= c || ecx < 2)
+		return;
+	uint32_t n = uint32_t(m_cycles - 1) / uint32_t(c);  // leaves the cycle count positive
+	if (n > ecx - 1) n = ecx - 1;                        // leaves the last pass to the loop
+
+	const I386_SREG &es = m_sreg[ES];
+	const uint32_t edi = REG32(EDI);
+	const uint32_t ea = es.base + edi;
+	if (!es.valid || (es.flags & 0x000c) || !(es.flags & 0x0002) || edi > es.limit || (ea & 3))
+		return;
+	const uint32_t in_limit = (es.limit - edi) / 4 + 1;      // offsets edi, edi+4, ... still <= limit
+	if (n > in_limit) n = in_limit;
+	const uint32_t in_space = (0xffffffffu - ea) / 4 + 1;    // dwords before the linear address wraps
+	if (n > in_space) n = in_space;
+
+	// where the loop fetches the opcode from on every pass, as a host address (null: not in plain memory)
+	uint32_t fetch = repeated_pc, error;
+	if ((m_cr[0] & 0x80000000) && !translate_address(m_CPL, TRANSLATE_FETCH, &fetch, &error))
+		return;
+	const uintptr_t code = uintptr_t(m_program->read_ptr(fetch));
+
+	const uint32_t value = REG32(EAX);
+	uint32_t done = 0;
+	while (done < n)
+	{
+		uint32_t chunk = n - done;
+		const uint32_t linear = ea + done * 4;
+		uint32_t address = linear;
+		if (m_cr[0] & 0x80000000)
+		{
+			if (!translate_address(m_CPL, TRANSLATE_WRITE, &address, &error))
+				break;
+			const uint32_t in_page = (0x1000 - (linear & 0xfff)) / 4;
+			if (chunk > in_page) chunk = in_page;
+		}
+
+		uintptr_t adj; uint32_t lo, len;
+		if (!m_program->direct_range_w(address, adj, lo, len))
+			break;
+		const uint32_t in_window = (lo + len - address) / 4;
+		if (chunk > in_window) chunk = in_window;
+
+		const uintptr_t host = adj + address;
+		bool last = false;
+		if (code >= host && code - host < uintptr_t(chunk) * 4)
+		{
+			chunk = uint32_t((code - host) / 4);
+			last = true;
+		}
+
+		uint8_t *dst = reinterpret_cast<uint8_t *>(host);
+		for (uint32_t i = 0; i < chunk; i++, dst += 4)
+		{
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+			dst[0] = uint8_t(value); dst[1] = uint8_t(value >> 8); dst[2] = uint8_t(value >> 16); dst[3] = uint8_t(value >> 24);
+#else
+			memcpy(dst, &value, 4);
+#endif
+		}
+		done += chunk;
+		if (last)
+			break;
+	}
+
+	REG32(EDI) = edi + done * 4;
+	REG32(ECX) = ecx - done;
+	m_cycles -= int(done) * c;
+}
+
 void i386_device::i386_repeat(int invert_flag)
 {
 	uint32_t repeated_eip = m_eip;
@@ -1250,6 +1348,8 @@ void i386_device::i386_repeat(int invert_flag)
 
 	/* now actually perform the repeat */
 	CYCLES_NUM(cycle_base);
+	if (opcode == 0xab && m_operand_size && m_address_size && !m_DF) // PINMAME
+		p2k_rep_stosd_bulk(repeated_pc);
 	do
 	{
 		m_eip = repeated_eip;

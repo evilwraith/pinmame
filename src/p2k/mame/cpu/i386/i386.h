@@ -794,6 +794,7 @@ protected:
 	void i386_outsw();
 	void i386_outsd();
 	void i386_repeat(int invert_flag);
+	void p2k_rep_stosd_bulk(uint32_t repeated_pc); // PINMAME
 	void i386_rep();
 	void i386_repne();
 	void i386_sahf();
