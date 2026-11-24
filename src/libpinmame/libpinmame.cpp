@@ -40,6 +40,7 @@ extern "C" {
 #include "video.h"
 #include "audit.h"
 #include "mech.h"
+#include "snd_cmd.h"
 #include "memory.h"
 
 extern int throttle;
@@ -290,6 +291,7 @@ static struct MsgLocals
    std::unique_ptr<PinballPlugin::Controller::CtrlItemProvider<DisplaySrcId>> displayProvider;
 
    unsigned int onAudioCmdId;
+   unsigned int onAudioLegacyCmdId;
    unsigned int onAudioUpdateId;
    unsigned int nAudioChannels;
    std::unique_ptr<AudioUpdateMsg> audioUpdate;
@@ -685,6 +687,9 @@ extern "C" int osd_start_audio_stream(const int stereo)
 {
    msgLocals.nAudioChannels = stereo ? 2 : 1;
 
+   // float output skips the mixer's INT16 conversion (no clipping at full scale, no dither)
+   mixer_set_float_output(_p_Config->audioFormat == PINMAME_AUDIO_FORMAT_FLOAT);
+
    if (msgLocals.msgApi != nullptr)
    {
       // Number of samples per frame supported by the output, which we suppose to be the default of the machine
@@ -743,6 +748,7 @@ extern "C" int osd_update_audio_stream(INT16* p_buffer)
          return 0;
 
       const int samplesThisFrame = mixer_samples_this_frame();
+      const bool isFloat = _p_Config->audioFormat == PINMAME_AUDIO_FORMAT_FLOAT;
 
       // Data are only valid in the context of the call, we need to copy the data to feed them on the message thread.
       AudioUpdateMsg* audioUpdate = new AudioUpdateMsg();
@@ -750,11 +756,11 @@ extern "C" int osd_update_audio_stream(INT16* p_buffer)
       audioUpdate->sourceId = { msgLocals.endpointId, 0 }; // Source is always tied to endpoint
       audioUpdate->streamId = { msgLocals.endpointId, 0 }; // Single stream source
       audioUpdate->channelFormat = (msgLocals.nAudioChannels == 1) ? CTLPI_AUDIO_FORMAT_CHANNEL_MONO : CTLPI_AUDIO_FORMAT_CHANNEL_STEREO;
-      audioUpdate->sampleFormat = CTLPI_AUDIO_FORMAT_SAMPLE_INT16;
+      audioUpdate->sampleFormat = isFloat ? CTLPI_AUDIO_FORMAT_SAMPLE_FLOAT : CTLPI_AUDIO_FORMAT_SAMPLE_INT16;
       audioUpdate->sampleRate = Machine->sample_rate;
-      audioUpdate->bufferSize = samplesThisFrame * 2 * msgLocals.nAudioChannels;
+      audioUpdate->bufferSize = samplesThisFrame * (isFloat ? (int)sizeof(float) : (int)sizeof(INT16)) * msgLocals.nAudioChannels;
       audioUpdate->buffer = new uint8_t[audioUpdate->bufferSize];
-      memcpy(audioUpdate->buffer, p_buffer, audioUpdate->bufferSize);
+      memcpy(audioUpdate->buffer, isFloat ? static_cast<const void*>(mixer_float_buffer()) : static_cast<const void*>(p_buffer), audioUpdate->bufferSize);
 
       msgLocals.msgApi->RunOnMainThread(msgLocals.endpointId, 0, [](void* userData) {
          AudioUpdateMsg* msg = static_cast<AudioUpdateMsg*>(userData);
@@ -773,7 +779,7 @@ extern "C" int osd_update_audio_stream(INT16* p_buffer)
       if (_p_Config->audioFormat == PINMAME_AUDIO_FORMAT_INT16)
          return (*(_p_Config->cb_OnAudioUpdated))((void*)p_buffer, samplesThisFrame, _p_userData);
 
-      src_short_to_float_array(p_buffer, _audioData, samplesThisFrame * _audioInfo.channels);
+      memcpy(_audioData, mixer_float_buffer(), samplesThisFrame * _audioInfo.channels * sizeof(float));
 
       return (*(_p_Config->cb_OnAudioUpdated))((void*)_audioData, samplesThisFrame, _p_userData);
    }
@@ -886,15 +892,24 @@ static void OnSoundCommand(void* userData)
 	delete msg;
 }
 
-// TODO: Pass the command's source (SND_CMD_*, see snd_cmd.h) on to the callback/message, plus the SND_CMD_LEGACY
-// data writes (snd_cmd_log_src returns before this for those), so libaltsound can take the commands as PinMAME's own
-// AltSound does (alt_sound_handle, preprocess_commands in snd_alt.cpp): a driver's own commands one by one for any pack,
-// the data writes logged as in 3.6 paired for the old packs, and for the boards whose logging changed in 3.7
-// (SNDBRD_DATALOG_LEGACY) their old data writes for the old packs. Counterparts: TODOs in libaltsound (altsound.h,
-// altsound.cpp) and in VPX's AltSound plugin (OnGameEvent)
-extern "C" void libpinmame_snd_cmd_log(int boardNo, int cmd)
+static void OnLegacySoundCommand(void* userData)
 {
-	if (_p_Config->cb_OnSoundCommand)
+   PinMAMEChildBoardEventMsg* msg = static_cast<PinMAMEChildBoardEventMsg*>(userData);
+	if (msgLocals.msgApi != nullptr && msgLocals.registered)
+		msgLocals.msgApi->BroadcastMsg(msgLocals.endpointId, msgLocals.onAudioLegacyCmdId, msg);
+	delete msg;
+}
+
+// Where the command comes from (src, SND_CMD_*, see snd_cmd.h) and whether the board logs its old data writes for the
+// old packs (legacyBoard, SNDBRD_DATALOG_LEGACY) go to the message listeners, as alt_sound_handle needs them to take the
+// stream a pack was made for (new_sound_commands). The SND_CMD_LEGACY writes only go out as OnAudioLegacyCmd, so
+// that a listener that doesn't know about them doesn't play them next to the driver's own commands, and the C callback
+// is not called for them, for the same reason.
+extern "C" void libpinmame_snd_cmd_log(int boardNo, int cmd, int src, int legacyBoard)
+{
+	const bool legacy = (src == SND_CMD_LEGACY);
+
+	if (!legacy && _p_Config->cb_OnSoundCommand)
 		(*(_p_Config->cb_OnSoundCommand))(boardNo, cmd, _p_userData);
 
 	if (msgLocals.msgApi != nullptr && msgLocals.registered)
@@ -902,7 +917,9 @@ extern "C" void libpinmame_snd_cmd_log(int boardNo, int cmd)
       PinMAMEChildBoardEventMsg* msg = new PinMAMEChildBoardEventMsg();
 		msg->boardNo = static_cast<unsigned int>(boardNo);
 		msg->cmd = static_cast<unsigned int>(cmd);
-		msgLocals.msgApi->RunOnMainThread(msgLocals.endpointId, 0, OnSoundCommand, msg);
+		msg->src = static_cast<unsigned int>(src);
+		msg->legacyBoard = legacyBoard ? 1u : 0u;
+		msgLocals.msgApi->RunOnMainThread(msgLocals.endpointId, 0, legacy ? OnLegacySoundCommand : OnSoundCommand, msg);
 	}
 }
 
@@ -3374,6 +3391,7 @@ static void SetupMsgApiVideoDisplays()
 static void SetupMsgApiAudioStreaming()
 {
    msgLocals.onAudioCmdId = msgLocals.msgApi->GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_CMD);
+   msgLocals.onAudioLegacyCmdId = msgLocals.msgApi->GetMsgID(PMPI_NAMESPACE, PMPI_EVT_ON_AUDIO_LEGACY_CMD);
    msgLocals.onAudioUpdateId = msgLocals.msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_ON_UPDATE_MSG);
 
    msgLocals.audioProvider = std::make_unique<PinballPlugin::Controller::CtrlItemProvider<AudioSrcId>>(msgLocals.msgApi, msgLocals.endpointId, CTLPI_AUDIO_GET_SRC_MSG, CTLPI_AUDIO_ON_SRC_CHG_MSG);
@@ -3435,6 +3453,7 @@ static void ReleaseMsgApi()
    msgLocals.msgApi->BroadcastMsg(msgLocals.endpointId, msgLocals.onAudioUpdateId, &audioStreamStop); // End of stream
    msgLocals.audioProvider = nullptr;
    msgLocals.msgApi->ReleaseMsgID(msgLocals.onAudioCmdId);
+   msgLocals.msgApi->ReleaseMsgID(msgLocals.onAudioLegacyCmdId);
    msgLocals.msgApi->ReleaseMsgID(msgLocals.onAudioUpdateId);
 
    msgLocals.displayProvider = nullptr;
