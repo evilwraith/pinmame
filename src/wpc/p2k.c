@@ -478,9 +478,6 @@ static PINMAME_VIDEO_UPDATE(p2k_video) {
 #if P2K_LINE_INTERPOLATE
       const UINT32 * const __restrict other = d ? below : src;
 #endif
-      /* The row pointer is loaded once, not per pixel: read through bitmap->line[] inside the loop
-         it has to be fetched again after every store, and the copy cannot be vectorised */
-      UINT16 * const __restrict dst = (UINT16 *)bitmap->line[ty];
       for (unsigned x = 0; x < width; x++) {
 #if P2K_LINE_INTERPOLATE
         const UINT32 srcx = src[x];
